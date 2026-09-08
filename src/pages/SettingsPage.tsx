@@ -479,51 +479,48 @@ export default function SettingsPage() {
         <p className="text-muted-foreground text-sm">Gerencie os recursos da sua loja</p>
       </div>
 
-      {/* Grade de Ícones (Tabs) */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-12 gap-3">
-        {([
-          { id: "links",       label: "Links",       icon: Link2 },
-          { id: "promocoes",   label: "Promoções",   icon: Sparkles },
-          { id: "integracoes", label: "Integrações", icon: Radio },
-          { id: "ifood",       label: "iFood",       icon: Store },
-          { id: "asaas",       label: "Asaas NF",    icon: Receipt },
-          { id: "assinatura",  label: "Assinatura",  icon: Star },
-          { id: "impressora",  label: "Impressora",  icon: Printer },
-          { id: "pdv",         label: "PDV",         icon: ShoppingCart },
-          { id: "sons",        label: "Sons/Alertas", icon: Volume2 },
-          { id: "vendedoras",  label: "Vendedoras",  icon: Users2 },
-          { id: "mesas",       label: "Mesas",       icon: LayoutGrid },
-          { id: "seguranca",   label: "Permissões",  icon: ShieldCheck },
-        ] as const).map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={cn(
-                "flex flex-col items-center justify-center p-4 bg-white border rounded-xl transition-all duration-300 group",
-                isActive 
-                  ? "border-blue-500 shadow-md ring-2 ring-blue-500/20 bg-blue-50/30 scale-105" 
-                  : "border-slate-200 hover:border-blue-400 hover:shadow-lg hover:-translate-y-1"
-              )}
-            >
-              <Icon 
-                strokeWidth={1.5} 
+      {/* Navegação de Abas Moderna & Espaçosa */}
+      <div className="bg-white p-2 rounded-2xl border border-slate-200/80 shadow-sm">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 no-scrollbar sm:flex-wrap">
+          {([
+            { id: "links",       label: "Links da Loja",      icon: Link2,       category: "Geral" },
+            { id: "promocoes",   label: "Promoções & Fidelidade", icon: Sparkles, category: "Vendas" },
+            { id: "pdv",         label: "Frente de Caixa (PDV)", icon: ShoppingCart, category: "Vendas" },
+            { id: "mesas",       label: "Mesas & Comandas",   icon: LayoutGrid,  category: "Vendas" },
+            { id: "vendedoras",  label: "Vendedoras",         icon: Users2,      category: "Vendas" },
+            { id: "impressora",  label: "Impressoras",        icon: Printer,     category: "Dispositivos" },
+            { id: "sons",        label: "Sons & Alertas",     icon: Volume2,     category: "Dispositivos" },
+            { id: "ifood",       label: "iFood Delivery",     icon: Store,       category: "Integrações" },
+            { id: "asaas",       label: "Asaas NF-e",         icon: Receipt,     category: "Fiscal" },
+            { id: "integracoes", label: "Integrações",        icon: Radio,       category: "Sistema" },
+            { id: "seguranca",   label: "Permissões & Senhas",icon: ShieldCheck, category: "Segurança" },
+            { id: "assinatura",  label: "Minha Assinatura",   icon: Star,        category: "Conta" },
+          ] as const).map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
                 className={cn(
-                  "w-10 h-10 mb-3 transition-colors",
-                  isActive ? "text-blue-600" : "text-blue-500 group-hover:text-blue-600"
-                )} 
-              />
-              <span className={cn(
-                "text-xs font-semibold text-center leading-tight",
-                isActive ? "text-blue-900" : "text-slate-600 group-hover:text-slate-900"
-              )}>
-                {tab.label}
-              </span>
-            </button>
-          );
-        })}
+                  "flex items-center gap-2.5 px-4 py-3 rounded-xl font-medium text-xs sm:text-sm transition-all whitespace-nowrap shrink-0 border",
+                  isActive 
+                    ? "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20 font-semibold scale-[1.02]" 
+                    : "bg-slate-50/70 text-slate-600 border-slate-200/60 hover:bg-slate-100 hover:text-slate-900"
+                )}
+              >
+                <Icon 
+                  strokeWidth={isActive ? 2 : 1.75} 
+                  className={cn(
+                    "w-4 h-4 sm:w-5 sm:h-5 transition-transform",
+                    isActive ? "text-white scale-110" : "text-slate-500"
+                  )} 
+                />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── ABA: LINKS ──────────────────────────────────────────────────────── */}
