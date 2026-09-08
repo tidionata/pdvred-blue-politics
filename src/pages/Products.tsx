@@ -23,7 +23,7 @@ import {
   Plus, Pencil, Trash2, Search, Package, Settings2,
   Tag, DollarSign, Boxes, ScanBarcode, List,
   CirclePlus, GripVertical, CheckCircle, ImageIcon, Link,
-  CheckCircle2, Clock,
+  CheckCircle2, Clock, Copy,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -61,6 +61,12 @@ export default function Products() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
+
+  const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
+  const [duplicateBaseProduct, setDuplicateBaseProduct] = useState<Product | null>(null);
+  const [duplicateName, setDuplicateName] = useState("");
+  const [duplicateImageUrl, setDuplicateImageUrl] = useState("");
+  const [duplicateAdditionals, setDuplicateAdditionals] = useState<ProductAdditional[]>([]);
 
   // ── Additionals state ────────────────────────────────────────────────────
   const [hasAdditionals, setHasAdditionals] = useState(false);
@@ -327,6 +333,83 @@ export default function Products() {
     }
   };
 
+  const openDuplicate = async (p: Product) => {
+    setDuplicateBaseProduct(p);
+    setDuplicateName(`${p.name} (Cópia)`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setDuplicateImageUrl((p as any).image_url ?? "");
+    setDuplicateAdditionals([]);
+
+    // Carrega adicionais do produto original
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((p as any).additionals_data) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setDuplicateAdditionals((p as any).additionals_data);
+    } else if (!p.id.startsWith("local-")) {
+      try {
+        const { data } = await (supabase as any).from("product_additionals")
+          .select("*").eq("product_id", p.id).order("created_at");
+        if (data) {
+          setDuplicateAdditionals(data as ProductAdditional[]);
+        }
+      } catch (_) {}
+    }
+
+    setDuplicateDialogOpen(true);
+  };
+
+  const closeDuplicateDialog = () => {
+    setDuplicateDialogOpen(false);
+    setDuplicateBaseProduct(null);
+    setDuplicateName("");
+    setDuplicateImageUrl("");
+    setDuplicateAdditionals([]);
+  };
+
+  const handleDuplicateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!duplicateBaseProduct) return;
+    if (!duplicateName.trim()) {
+      toast.error("Nome do produto é obrigatório");
+      return;
+    }
+
+    const p = duplicateBaseProduct;
+    // Cria o novo produto clonando preços, estoque, tributação e categorias do original
+    const duplicatedProduct: Partial<TablesInsert<"products">> & { image_url?: string, tax_ibs_cbs_classificacao?: string, menu_type?: string } = {
+      name: duplicateName.trim(),
+      barcode: "", // Deixa vazio para não duplicar código de barra único
+      category: p.category ?? "",
+      description: p.description ?? "",
+      cost: p.cost ?? 0,
+      price: p.price ?? 0,
+      stock_total: p.stock_total ?? 0,
+      stock_display: p.stock_display ?? 0,
+      min_display_stock: p.min_display_stock ?? 0,
+      active: p.active ?? true,
+      image_url: duplicateImageUrl ?? "",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tax_ibs_cbs_classificacao: (p as any).tax_ibs_cbs_classificacao ?? "010101",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      menu_type: (p as any).menu_type ?? "both",
+    };
+
+    upsertMutation.mutate({
+      product: duplicatedProduct,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      hasAdds: (p as any).has_additionals ?? false,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      maxAdds: (p as any).max_additionals ?? 0,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      unitType: (p as any).unit ?? "UN",
+      adds: duplicateAdditionals,
+    }, {
+      onSuccess: () => {
+        closeDuplicateDialog();
+      }
+    });
+  };
+
   const closeDialog = () => {
     setDialogOpen(false); setEditingId(null); setForm(emptyForm);
     setHasAdditionals(false); setMaxAdditionals(0); setAdditionals([]);
@@ -478,10 +561,13 @@ export default function Products() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
+                          <Button variant="ghost" size="icon" title="Duplicar produto" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => openDuplicate(p)}>
+                            <Copy className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" title="Editar produto" onClick={() => openEdit(p)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive"
+                          <Button variant="ghost" size="icon" title="Excluir produto" className="text-destructive hover:text-destructive"
                             onClick={() => { if (confirm(`Remover "${p.name}"?`)) deleteMutation.mutate(p.id); }}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -945,6 +1031,170 @@ export default function Products() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══ DIALOG: Duplicar Produto (Apenas Nome e Foto) ═════════════════ */}
+      <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-blue-600">
+              <Copy className="h-5 w-5" />
+              Duplicar Produto
+            </DialogTitle>
+          </DialogHeader>
+
+          {duplicateBaseProduct && (
+            <form onSubmit={handleDuplicateSubmit} className="space-y-4">
+              <div className="bg-muted/40 p-3 rounded-xl border space-y-1 text-xs text-muted-foreground">
+                <p className="font-semibold text-foreground text-sm flex items-center gap-1.5">
+                  <Package className="h-4 w-4 text-blue-600" />
+                  Baseado em: {duplicateBaseProduct.name}
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+                  <span>Preço: <strong>{fmt(duplicateBaseProduct.price)}</strong></span>
+                  <span>Categoria: <strong>{duplicateBaseProduct.category || "—"}</strong></span>
+                  <span>Estoque: <strong>{duplicateBaseProduct.stock_total}</strong></span>
+                </div>
+              </div>
+
+              {/* Nome do Novo Produto */}
+              <div className="space-y-1.5">
+                <Label htmlFor="dup-name">Novo Nome do Produto *</Label>
+                <Input
+                  id="dup-name"
+                  value={duplicateName}
+                  onChange={e => setDuplicateName(e.target.value)}
+                  placeholder="Ex: Açaí 500ml..."
+                  autoFocus
+                  required
+                />
+              </div>
+
+              {/* Foto do Produto */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5 text-sm font-medium">
+                  <ImageIcon className="h-4 w-4" /> Foto do Novo Produto
+                </Label>
+                <div className="flex items-start gap-3">
+                  <div className="h-20 w-20 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/30 overflow-hidden shrink-0">
+                    {duplicateImageUrl ? (
+                      <img src={duplicateImageUrl} alt="Preview" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                    ) : (
+                      <ImageIcon className="h-7 w-7 text-muted-foreground/40" />
+                    )}
+                  </div>
+
+                  <div className="flex-1 space-y-2">
+                    <Input 
+                      type="file" 
+                      accept="image/*" 
+                      className="h-9 text-xs cursor-pointer"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        
+                        try {
+                          toast.loading("Processando imagem...");
+                          const reader = new FileReader();
+                          reader.readAsDataURL(file);
+                          reader.onload = (event) => {
+                            const img = new Image();
+                            img.src = event.target?.result as string;
+                            img.onload = () => {
+                              const canvas = document.createElement('canvas');
+                              const maxDim = 800;
+                              let width = img.width;
+                              let height = img.height;
+                              if (width > height) {
+                                if (width > maxDim) {
+                                  height = Math.round((height * maxDim) / width);
+                                  width = maxDim;
+                                }
+                              } else {
+                                if (height > maxDim) {
+                                  width = Math.round((width * maxDim) / height);
+                                  height = maxDim;
+                                }
+                              }
+                              canvas.width = width;
+                              canvas.height = height;
+                              const ctx = canvas.getContext('2d');
+                              ctx?.drawImage(img, 0, 0, width, height);
+
+                              canvas.toBlob(async (blob) => {
+                                if (!blob) {
+                                  toast.dismiss();
+                                  toast.error("Erro ao comprimir");
+                                  return;
+                                }
+                                const fileName = `${storeId}/${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+                                try {
+                                  const { error } = await supabase.storage
+                                    .from('product-images')
+                                    .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
+                                  if (error) throw error;
+                                  const { data: { publicUrl } } = supabase.storage
+                                    .from('product-images')
+                                    .getPublicUrl(fileName);
+                                  setDuplicateImageUrl(publicUrl);
+                                  toast.dismiss();
+                                  toast.success("Foto atualizada!");
+                                } catch (_) {
+                                  const r = new FileReader();
+                                  r.readAsDataURL(blob);
+                                  r.onloadend = () => {
+                                    setDuplicateImageUrl(r.result as string);
+                                    toast.dismiss();
+                                    toast.success("Foto salva!");
+                                  };
+                                }
+                              }, 'image/jpeg', 0.82);
+                            };
+                          };
+                        } catch (err: any) {
+                          toast.dismiss();
+                          toast.error(`Erro ao carregar foto: ${err.message}`);
+                        }
+                      }}
+                    />
+
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Ou cole o link da foto..."
+                        value={duplicateImageUrl}
+                        onChange={e => setDuplicateImageUrl(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                      {duplicateImageUrl && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                          type="button"
+                          onClick={() => setDuplicateImageUrl("")}
+                          title="Remover foto"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 pt-2">
+                <Button type="button" variant="outline" onClick={closeDuplicateDialog}>
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={upsertMutation.isPending} className="bg-blue-600 hover:bg-blue-700 gap-1.5">
+                  <Copy className="h-4 w-4" />
+                  {upsertMutation.isPending ? "Duplicando..." : "Salvar e Duplicar"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 
