@@ -16,9 +16,10 @@ import {
   FileText, Save, ExternalLink as ExtLink, Shield, Radio, Printer,
   CheckCircle2, Star, Clock, ShoppingBag, Receipt, Percent, LayoutGrid,
   Lock, KeyRound, ShieldCheck, Users2, DollarSign, Trash2,
-  Volume2, VolumeX, Volume1, Play,
+  Volume2, VolumeX, Volume1, Play, Sparkles, Gift, Tag, Award
 } from "lucide-react";
 import { cn, getSoundConfig, saveSoundConfig, playNotificationSound, SOUND_OPTIONS, type SoundConfig } from "@/lib/utils";
+import { getLoyaltyPromoConfig, saveLoyaltyPromoConfig, type LoyaltyPromoConfig } from "@/lib/loyalty";
 import {
   SEFAZ_BY_UF, UF_NAMES, SERVICO_LABELS,
   type SefazServico,
@@ -64,7 +65,7 @@ function maskCnpj(v: string) {
 export default function SettingsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"links" | "integracoes" | "assinatura" | "ifood" | "asaas" | "impressora" | "pdv" | "sons" | "vendedoras" | "mesas" | "seguranca">("links");
+  const [activeTab, setActiveTab] = useState<"links" | "integracoes" | "assinatura" | "ifood" | "asaas" | "impressora" | "pdv" | "sons" | "vendedoras" | "mesas" | "seguranca" | "promocoes">("links");
   const [sefazServico, setSefazServico] = useState<SefazServico>("NFeAutorizacao");
   const [showToken, setShowToken] = useState(false);
   const [nfe, setNfe] = useState<NfeConfig>({});
@@ -72,6 +73,15 @@ export default function SettingsPage() {
   const [asaas, setAsaas] = useState<AsaasConfig>({});
   const [nfeLoaded, setNfeLoaded] = useState(false);
   const [mesasConfig, setMesasConfig] = useState({ table_count: 0, has_counters: false, counter_count: 0, table_fee: 0 });
+
+  // ── Promoções & Fidelidade ──────────────────────────────────────────────────
+  const [loyaltyConfig, setLoyaltyConfig] = useState<LoyaltyPromoConfig>(() => getLoyaltyPromoConfig());
+
+  const saveLoyalty = (cfg: LoyaltyPromoConfig) => {
+    setLoyaltyConfig(cfg);
+    saveLoyaltyPromoConfig(cfg);
+    toast.success("Configuração de Promoção & Fidelidade salva!");
+  };
 
   // ── Permissões & Senha Master ─────────────────────────────────────────────────
   const [adminPassword, setAdminPassword] = useState(() => localStorage.getItem("pdv_admin_password") || "");
@@ -470,9 +480,10 @@ export default function SettingsPage() {
       </div>
 
       {/* Grade de Ícones (Tabs) */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-11 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-12 gap-3">
         {([
           { id: "links",       label: "Links",       icon: Link2 },
+          { id: "promocoes",   label: "Promoções",   icon: Sparkles },
           { id: "integracoes", label: "Integrações", icon: Radio },
           { id: "ifood",       label: "iFood",       icon: Store },
           { id: "asaas",       label: "Asaas NF",    icon: Receipt },
@@ -603,6 +614,269 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {/* ── ABA: PROMOÇÕES & FIDELIDADE ────────────────────────────────────────── */}
+      {activeTab === "promocoes" && (
+        <div className="space-y-6">
+          <Card className="border-blue-100 shadow-sm">
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <CardTitle className="text-xl flex items-center gap-2 text-blue-900">
+                    <Sparkles className="h-5 w-5 text-blue-600" />
+                    Programa de Fidelidade & Promoção por Compras
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Crie uma promoção para premiar seus clientes conforme eles acumulam compras na sua loja.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-50 border p-2 rounded-lg shrink-0">
+                  <span className="text-xs font-semibold text-slate-700">Ativar Programa:</span>
+                  <input
+                    type="checkbox"
+                    checked={loyaltyConfig.enabled}
+                    onChange={(e) => saveLoyalty({ ...loyaltyConfig, enabled: e.target.checked })}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Nome da Promoção */}
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-semibold flex items-center gap-1.5">
+                    <Tag className="h-4 w-4 text-blue-600" />
+                    Nome da Promoção / Campanha
+                  </Label>
+                  <Input
+                    placeholder="Ex: Fidelidade 10 Compras, Ganhe no 5º Pedido"
+                    value={loyaltyConfig.name}
+                    onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, name: e.target.value })}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Nome visível no PDV e na ficha de clientes.
+                  </p>
+                </div>
+
+                {/* Modo de Aplicação */}
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-semibold flex items-center gap-1.5">
+                    <Award className="h-4 w-4 text-blue-600" />
+                    Como o Prêmio será Aplicado?
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLoyaltyConfig({ ...loyaltyConfig, mode: "auto" })}
+                      className={cn(
+                        "p-2.5 rounded-lg border text-xs font-semibold text-left transition-all",
+                        loyaltyConfig.mode === "auto"
+                          ? "border-blue-600 bg-blue-50 text-blue-900 ring-2 ring-blue-500/20"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                      )}
+                    >
+                      <span className="block font-bold">⚡ Automático</span>
+                      <span className="text-[10px] text-muted-foreground">Aplica o desconto ou brinde assim que atinge as compras</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLoyaltyConfig({ ...loyaltyConfig, mode: "manual" })}
+                      className={cn(
+                        "p-2.5 rounded-lg border text-xs font-semibold text-left transition-all",
+                        loyaltyConfig.mode === "manual"
+                          ? "border-blue-600 bg-blue-50 text-blue-900 ring-2 ring-blue-500/20"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                      )}
+                    >
+                      <span className="block font-bold">✋ Manual</span>
+                      <span className="text-[10px] text-muted-foreground">O caixa decide na hora do pagamento se aplica o prêmio</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quantas compras para ganhar */}
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-semibold">
+                    Quantas compras o cliente precisa fazer para ganhar?
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={loyaltyConfig.targetPurchases || 10}
+                      onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, targetPurchases: Math.max(1, parseInt(e.target.value) || 1) })}
+                      className="w-32 font-bold text-center"
+                    />
+                    <span className="text-sm text-muted-foreground">compras finalizadas</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Ex: Coloque <strong>5</strong> para o cliente ganhar na 5ª compra, ou <strong>10</strong> para a cada 10 compras.
+                  </p>
+                </div>
+
+                {/* Valor mínimo da compra */}
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-semibold">
+                    Valor mínimo por compra (opcional)
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-muted-foreground">R$</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.50"
+                      value={loyaltyConfig.minPurchaseValue || 0}
+                      onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, minPurchaseValue: Math.max(0, parseFloat(e.target.value) || 0) })}
+                      className="w-32 font-bold text-center"
+                    />
+                    <span className="text-sm text-muted-foreground">para pontuar</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Se for R$ 0, qualquer valor de compra já conta 1 selo/estrela.
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* O que ele ganha */}
+              <div className="space-y-4">
+                <div>
+                  <h3 className="font-bold text-base flex items-center gap-2 text-slate-800">
+                    <Gift className="h-5 w-5 text-amber-500" />
+                    O que o cliente ganha de prêmio?
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Escolha o tipo de benefício concedido ao atingir a meta de compras.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setLoyaltyConfig({ ...loyaltyConfig, rewardType: "fixed_discount" })}
+                    className={cn(
+                      "p-3 rounded-xl border text-left transition-all",
+                      loyaltyConfig.rewardType === "fixed_discount"
+                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-500/20"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    )}
+                  >
+                    <span className="block font-bold text-sm text-emerald-900">💵 Desconto em Dinheiro (R$)</span>
+                    <span className="text-[11px] text-muted-foreground">Ex: R$ 10 de desconto no valor total da venda</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLoyaltyConfig({ ...loyaltyConfig, rewardType: "percent_discount" })}
+                    className={cn(
+                      "p-3 rounded-xl border text-left transition-all",
+                      loyaltyConfig.rewardType === "percent_discount"
+                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-500/20"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    )}
+                  >
+                    <span className="block font-bold text-sm text-emerald-900">🏷️ Desconto em Porcentagem (%)</span>
+                    <span className="text-[11px] text-muted-foreground">Ex: 10% ou 15% de desconto no pedido</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLoyaltyConfig({ ...loyaltyConfig, rewardType: "gift" })}
+                    className={cn(
+                      "p-3 rounded-xl border text-left transition-all",
+                      loyaltyConfig.rewardType === "gift"
+                        ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-500/20"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    )}
+                  >
+                    <span className="block font-bold text-sm text-emerald-900">🎁 Brinde / Produto Grátis</span>
+                    <span className="text-[11px] text-muted-foreground">Ex: 1 Refrigerante Grátis, 1 Sobremesa, etc.</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border">
+                  {loyaltyConfig.rewardType === "fixed_discount" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Valor do Desconto em Reais</Label>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-emerald-700">R$</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          step="0.50"
+                          value={loyaltyConfig.rewardValue || 10}
+                          onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, rewardValue: parseFloat(e.target.value) || 0 })}
+                          className="w-32 font-bold"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {loyaltyConfig.rewardType === "percent_discount" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Porcentagem de Desconto</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={loyaltyConfig.rewardValue || 10}
+                          onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, rewardValue: parseFloat(e.target.value) || 0 })}
+                          className="w-28 font-bold text-center"
+                        />
+                        <span className="font-bold text-emerald-700">%</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 flex-1">
+                    <Label className="text-xs font-semibold">Descrição do Prêmio para Exibição</Label>
+                    <Input
+                      placeholder="Ex: R$ 10 OFF na compra / 1 Sobremesa Grátis"
+                      value={loyaltyConfig.rewardDescription}
+                      onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, rewardDescription: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Pré-visualização do Cartão */}
+              <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-5 text-white shadow-md flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="space-y-1 text-center sm:text-left">
+                  <Badge className="bg-white/20 text-white hover:bg-white/30 border-0 mb-1">
+                    Exemplo de Cartão Fidelidade
+                  </Badge>
+                  <h4 className="text-lg font-bold">{loyaltyConfig.name || "Programa de Fidelidade"}</h4>
+                  <p className="text-xs text-blue-100">
+                    A cada <strong>{loyaltyConfig.targetPurchases || 10} compras</strong>
+                    {loyaltyConfig.minPurchaseValue > 0 ? ` acima de R$ ${loyaltyConfig.minPurchaseValue.toFixed(2)}` : ""} ganhe: <strong>{loyaltyConfig.rewardDescription || "Prêmio Especial"}</strong>
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 bg-black/20 px-4 py-2.5 rounded-lg border border-white/10 shrink-0">
+                  <Award className="h-5 w-5 text-amber-300 animate-bounce" />
+                  <span className="text-xs font-bold text-amber-200">
+                    {loyaltyConfig.mode === "auto" ? "Aplicação Automática" : "Aplicação Manual no Caixa"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Botão Salvar */}
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => saveLoyalty(loyaltyConfig)}
+                  className="gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 shadow-md"
+                >
+                  <Save className="h-4 w-4" />
+                  Salvar Configurações de Fidelidade
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* ── ABA: INTEGRAÇÕES ────────────────────────────────────────────────── */}

@@ -1,11 +1,12 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Copy, ShoppingBag } from "lucide-react";
+import { Loader2, Copy, ShoppingBag, Sparkles, Award } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { getLoyaltyPromoConfig, getCustomerPurchasesCount } from "@/lib/loyalty";
 
 interface ClienteHistoricoModalProps {
   isOpen: boolean;
@@ -16,6 +17,10 @@ interface ClienteHistoricoModalProps {
 
 export function ClienteHistoricoModal({ isOpen, onClose, customer, storeId }: ClienteHistoricoModalProps) {
   const navigate = useNavigate();
+  const loyaltyConfig = getLoyaltyPromoConfig(storeId);
+  const purchasesCount = customer ? getCustomerPurchasesCount(customer.id, customer.phone) : 0;
+  const targetPurchases = loyaltyConfig.targetPurchases || 10;
+  const hasReward = loyaltyConfig.enabled && purchasesCount >= targetPurchases;
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ["customer-orders", customer?.id, customer?.phone, customer?.name],
@@ -115,7 +120,33 @@ export function ClienteHistoricoModal({ isOpen, onClose, customer, storeId }: Cl
           <DialogTitle>Histórico: {customer?.name}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto py-4">
+        <div className="flex-1 overflow-y-auto py-4 space-y-4">
+          {/* Card de Fidelidade */}
+          {loyaltyConfig.enabled && (
+            <div className="p-4 rounded-xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-600" />
+                  <span className="font-bold text-sm text-amber-950">{loyaltyConfig.name || "Programa de Fidelidade"}</span>
+                </div>
+                <p className="text-xs text-amber-900/80">
+                  Prêmio: <strong>{loyaltyConfig.rewardDescription || "Desconto / Brinde"}</strong> a cada {targetPurchases} compras.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold bg-white border border-amber-300 text-amber-900 px-2.5 py-1 rounded-lg shadow-sm">
+                  {purchasesCount} / {targetPurchases} compras
+                </span>
+                {hasReward && (
+                  <span className="text-xs bg-emerald-600 text-white font-bold px-2 py-1 rounded-lg flex items-center gap-1 shadow-sm animate-pulse">
+                    <Award className="h-3.5 w-3.5" /> Prêmio Disponível!
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           {isLoading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

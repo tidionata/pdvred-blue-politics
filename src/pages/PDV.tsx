@@ -21,13 +21,14 @@ import {
   ShoppingCart, Search, Plus, Minus, Trash2, CreditCard,
   Banknote, QrCode, Receipt, Percent, DollarSign, X, Printer,
   CheckCircle2, Image as ImageIcon, UtensilsCrossed, Edit2, Pencil,
-  History, Ban, RotateCcw, AlertTriangle,
+  History, Ban, RotateCcw, AlertTriangle, Sparkles, Award, Gift,
 } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
 import { printToKitchen, buildKitchenReceiptHtml } from "@/lib/electronPrinting";
 import { db } from "@/lib/db";
 import { CustomerSearchModal } from "@/components/Clientes/CustomerSearchModal";
 import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
+import { getLoyaltyPromoConfig, getCustomerPurchasesCount, addCustomerPurchaseStamp, setCustomerPurchasesCount } from "@/lib/loyalty";
 
 type Product = Tables<"products">;
 
@@ -1030,6 +1031,15 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
          return;
       }
 
+      // Acumula compra no programa de fidelidade se houver cliente
+      const loyaltyCfg = getLoyaltyPromoConfig(storeId);
+      if (loyaltyCfg.enabled && (customerId || customerPhone.trim())) {
+        const result = addCustomerPurchaseStamp(customerId || undefined, customerPhone.trim() || undefined, total, loyaltyCfg);
+        if (result.wonReward) {
+          toast.success(`🎉 Cliente completou a meta de fidelidade! Ganhou: ${loyaltyCfg.rewardDescription}`);
+        }
+      }
+
       toast.success("Venda finalizada com sucesso!");
       setCart([]);
       setDiscount(0);
@@ -1043,6 +1053,8 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
       setSelectedTable(null);
       setPendingSaleId(null);
       refetchPending();
+      refetchRecentSales();
+      queryClient.invalidateQueries({ queryKey: ["store-customers"] });
       
       const newTicket: SaleTicket = {
         saleId: data?.id || `off-${Date.now()}`,
@@ -1450,6 +1462,59 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       Buscar
                     </Button>
                   </div>
+
+                  {/* Banner de Fidelidade do Cliente Selecionado */}
+                  {(() => {
+                    const loyaltyCfg = getLoyaltyPromoConfig(storeId);
+                    if (!loyaltyCfg.enabled || (!customerId && !customerPhone.trim())) return null;
+
+                    const purchasesCount = getCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined);
+                    const target = loyaltyCfg.targetPurchases || 10;
+                    const hasReward = purchasesCount >= target;
+
+                    const handleApplyReward = () => {
+                      if (loyaltyCfg.rewardType === "fixed_discount") {
+                        setDiscountType("fixed");
+                        setDiscount(loyaltyCfg.rewardValue || 0);
+                      } else if (loyaltyCfg.rewardType === "percent_discount") {
+                        setDiscountType("percent");
+                        setDiscount(loyaltyCfg.rewardValue || 0);
+                      }
+                      // Subtrai a meta ou reseta selos
+                      setCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, purchasesCount - target);
+                      toast.success(`🎁 Prêmio "${loyaltyCfg.rewardDescription}" aplicado ao pedido!`);
+                    };
+
+                    return (
+                      <div className="p-2 rounded-lg bg-gradient-to-r from-amber-500/10 to-amber-500/5 border border-amber-300 text-xs flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Sparkles className="h-4 w-4 text-amber-600 shrink-0" />
+                          <div className="truncate">
+                            <span className="font-bold text-amber-950 block truncate">{loyaltyCfg.name}:</span>
+                            <span className="text-[10px] text-amber-900 font-medium">
+                              {purchasesCount} de {target} compras acumuladas
+                            </span>
+                          </div>
+                        </div>
+
+                        {hasReward ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold shrink-0 animate-bounce shadow-sm gap-1 px-2.5"
+                            onClick={handleApplyReward}
+                          >
+                            <Gift className="h-3.5 w-3.5" />
+                            Aplicar Prêmio!
+                          </Button>
+                        ) : (
+                          <span className="text-[10px] font-bold bg-white border border-amber-200 text-amber-900 px-2 py-0.5 rounded shrink-0">
+                            Faltam {target - purchasesCount}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="grid grid-cols-3 gap-1">
                     <button 
                         onClick={() => setDeliveryType("local")}
