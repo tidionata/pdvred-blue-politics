@@ -881,7 +881,7 @@ export default function Pedidos() {
           <ShoppingBag className="h-12 w-12 opacity-20" />
           <p className="font-medium">Nenhum pedido {filter === "active" ? "ativo" : ""}</p>
           <p className="text-sm text-center max-w-xs">
-            Quando clientes fizerem pedidos pelo cardápio, eles aparecerão aqui.
+            Quando clientes fizerem pedidos pelo catálogo online, eles aparecerão aqui.
           </p>
         </div>
       ) : (

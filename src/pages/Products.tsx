@@ -595,13 +595,13 @@ export default function Products() {
                 </div>
                 <div className="sm:col-span-3">
                   <Label>Descrição</Label>
-                  <Textarea value={form.description ?? ""} onChange={e => setField("description", e.target.value)} placeholder="Detalhes que aparecem no cardápio online..." rows={2} />
+                  <Textarea value={form.description ?? ""} onChange={e => setField("description", e.target.value)} placeholder="Detalhes que aparecem no catálogo online..." rows={2} />
                 </div>
 
-                {/* Foto do Produto (Cardápio Online) */}
+                {/* Foto do Produto (Catálogo Online) */}
                 <div className="sm:col-span-3">
                   <Label className="flex items-center gap-1.5 mb-2">
-                    <ImageIcon className="h-3.5 w-3.5" /> Foto do Produto (Cardápio Online)
+                    <ImageIcon className="h-3.5 w-3.5" /> Foto do Produto (Catálogo Online)
                   </Label>
                   <div className="flex items-start gap-4">
                     <div className="h-20 w-20 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/30 overflow-hidden shrink-0">
@@ -731,19 +731,19 @@ export default function Products() {
                   </div>
                 </div>
 
-                {/* Turno do Cardápio (Dia/Noite) */}
+                {/* Turno do Catálogo (Dia/Noite) */}
                 <div className="sm:col-span-3">
                   <div className="p-4 rounded-xl border-2 bg-primary/5 border-primary/20 space-y-3">
                     <div className="flex items-center gap-2">
                       <Clock className="h-4 w-4 text-primary" />
-                      <Label className="font-bold text-primary">Disponibilidade no Cardápio Online</Label>
+                      <Label className="font-bold text-primary">Disponibilidade no Catálogo Online</Label>
                     </div>
                     <p className="text-xs text-muted-foreground">Escolha em qual período este produto ficará visível para os clientes.</p>
                     
                     <div className="grid grid-cols-3 gap-2">
                       {[
-                        { id: "morning", label: "Só de Dia", sub: "Churrascaria" },
-                        { id: "night", label: "Só de Noite", sub: "Macarrão" },
+                        { id: "morning", label: "Só de Dia", sub: "Manhã" },
+                        { id: "night", label: "Só de Noite", sub: "Noite" },
                         { id: "both", label: "Ambos", sub: "Tempo Todo" },
                       ].map((type) => (
                         <button
@@ -860,7 +860,7 @@ export default function Products() {
                     Tem Opções / Adicionais / Acompanhamentos
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Permite selecionar extras no PDV (ex: Marmita → carnes, Açaí → morango, etc.)
+                    Permite selecionar extras no PDV e Catálogo (ex: Açaí → morango/nutella, Pizza → borda, etc.)
                   </p>
                 </div>
                 {hasAdditionals && (
@@ -906,7 +906,7 @@ export default function Products() {
                   <div className="space-y-2">
                     <Label className="text-sm font-semibold flex items-center gap-1.5">
                       <GripVertical className="h-4 w-4 text-muted-foreground" />
-                      Opções / Carnes / Itens disponíveis:
+                      Opções / Itens disponíveis:
                     </Label>
 
                     {additionals.length === 0 ? (
@@ -940,9 +940,9 @@ export default function Products() {
                     {/* Add new */}
                     <div className="flex gap-2 items-end pt-1">
                       <div className="flex-1">
-                        <Label className="text-xs text-muted-foreground">Nome da Opção/Carne/Adicional</Label>
+                        <Label className="text-xs text-muted-foreground">Nome da Opção / Adicional</Label>
                         <Input
-                          placeholder="Ex: Picanha, Morango, Média..."
+                          placeholder="Ex: Morango, Nutella, Queijo Extra, Tamanho M..."
                           value={newAddName}
                           onChange={e => setNewAddName(e.target.value)}
                           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addAdditional(); } }}

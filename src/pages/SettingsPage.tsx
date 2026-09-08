@@ -392,9 +392,9 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["store"] });
-      toast.success("Cardápio online atualizado!");
+      toast.success("Catálogo online atualizado!");
     },
-    onError: (e: any) => toast.error(`Erro ao trocar cardápio: ${e.message}`),
+    onError: (e: any) => toast.error(`Erro ao trocar catálogo: ${e.message}`),
   });
 
   // ⚡ Mutation: salvar mesas ⚡
@@ -545,12 +545,12 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          {/* Link do Cardápio */}
+          {/* Link do Catálogo */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <UtensilsCrossed className="h-5 w-5 text-primary" />
-                Cardápio Online — Link para clientes
+                <ShoppingBag className="h-5 w-5 text-primary" />
+                Catálogo Online — Link para clientes
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -563,12 +563,12 @@ export default function SettingsPage() {
               <div className="p-4 rounded-xl border-2 bg-primary/5 border-primary/20 space-y-3 mt-4">
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-primary" />
-                  <Label className="font-bold text-primary text-sm uppercase tracking-wider">Qual cardápio mostrar agora?</Label>
+                  <Label className="font-bold text-primary text-sm uppercase tracking-wider">Qual catálogo mostrar agora?</Label>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {[
-                    { id: "morning", label: "Churrascaria", sub: "Manhã" },
-                    { id: "night", label: "Macarrão", sub: "Noite" },
+                    { id: "morning", label: "Só de Dia", sub: "Manhã" },
+                    { id: "night", label: "Só de Noite", sub: "Noite" },
                     { id: "both", label: "Ambos", sub: "Dia Todo" },
                   ].map((m) => (
                     <button
@@ -592,9 +592,9 @@ export default function SettingsPage() {
               </div>
 
               <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-sm text-emerald-700 space-y-1 mt-4">
-                <p className="font-semibold flex items-center gap-1.5"><UtensilsCrossed className="h-4 w-4" /> Como funciona:</p>
+                <p className="font-semibold flex items-center gap-1.5"><ShoppingBag className="h-4 w-4" /> Como funciona:</p>
                 <ul className="list-disc list-inside space-y-0.5 text-xs">
-                  <li>Cliente acessa o link e vê o cardápio com fotos e preços</li>
+                  <li>Cliente acessa o link e vê o catálogo com fotos e preços</li>
                   <li>Adiciona itens ao carrinho e informa nome e telefone</li>
                   <li>Envia o pedido — você recebe na tela de Pedidos</li>
                   <li>Você aceita, muda o status e o cliente acompanha em tempo real</li>

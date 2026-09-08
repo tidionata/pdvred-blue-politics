@@ -336,10 +336,10 @@ export default function Cardapio() {
       <header className="sticky top-0 z-30 bg-white border-b shadow-sm">
         <div className="max-w-3xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <UtensilsCrossed className="h-6 w-6 text-primary" />
+            <ShoppingBag className="h-6 w-6 text-primary" />
             <div>
               <p className="font-bold text-base font-['Space_Grotesk'] leading-tight">
-                {store?.name ?? "Cardápio"}
+                {store?.name ?? "Catálogo"}
               </p>
               <p className="text-xs text-muted-foreground">Faça seu pedido</p>
             </div>
@@ -402,7 +402,7 @@ export default function Cardapio() {
         {isLoading ? (
           <div className="flex items-center justify-center py-20 text-muted-foreground gap-2">
             <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            Carregando cardápio...
+            Carregando catálogo...
           </div>
         ) : products.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-muted-foreground">

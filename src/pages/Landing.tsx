@@ -21,7 +21,7 @@ const plans = [
     features: [
       "Produtos ilimitados",
       "Usuários ilimitados",
-      "PDV + Cardápio online",
+      "PDV + Catálogo online",
       "Gestão de Mesas e Balcões",
       "Controle de fiados e fluxo de caixa",
       "Suporte prioritário via WhatsApp"
