@@ -2,9 +2,12 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Loader2, Plus, Search, User, FileText, CheckCircle2 } from "lucide-react";
+import { Loader2, Plus, Search, User, FileText, CheckCircle2, LayoutGrid, List, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
 import { ClienteHistoricoModal } from "@/components/Clientes/ClienteHistoricoModal";
 import { toast } from "sonner";
@@ -14,6 +17,9 @@ export default function Clientes() {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    return (localStorage.getItem("clientes_view_mode") as "grid" | "list") || "grid";
+  });
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<any>(null);
   const [historyCustomer, setHistoryCustomer] = useState<any>(null);
@@ -121,14 +127,48 @@ export default function Clientes() {
             </div>
 
             <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar cliente por nome ou telefone..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-9 max-w-md"
-                />
+              <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Buscar cliente por nome ou telefone..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+
+                {/* Botões para alternar modo de visualização: Grade (Cards) vs Lista (Colunas) */}
+                <div className="flex items-center gap-1 border rounded-lg p-1 bg-muted/30 shrink-0 self-end sm:self-auto">
+                  <Button
+                    type="button"
+                    variant={viewMode === "grid" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs px-2.5"
+                    onClick={() => {
+                      setViewMode("grid");
+                      localStorage.setItem("clientes_view_mode", "grid");
+                    }}
+                    title="Exibição em Cards"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                    <span>Cards</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={viewMode === "list" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs px-2.5"
+                    onClick={() => {
+                      setViewMode("list");
+                      localStorage.setItem("clientes_view_mode", "list");
+                    }}
+                    title="Exibição em Colunas (Tabela)"
+                  >
+                    <List className="h-3.5 w-3.5" />
+                    <span>Colunas</span>
+                  </Button>
+                </div>
               </div>
 
               {isLoading ? (
@@ -140,7 +180,81 @@ export default function Clientes() {
                   <User className="h-12 w-12 mx-auto mb-3 opacity-20" />
                   <p>Nenhum cliente encontrado.</p>
                 </div>
+              ) : viewMode === "list" ? (
+                /* ── MODO TABELA / COLUNAS ── */
+                <div className="overflow-x-auto border rounded-lg">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40">
+                        <TableHead>Nome</TableHead>
+                        <TableHead>Telefone / WhatsApp</TableHead>
+                        <TableHead className="hidden md:table-cell">Endereço</TableHead>
+                        <TableHead className="hidden lg:table-cell">Observações</TableHead>
+                        <TableHead className="text-center">Promoções</TableHead>
+                        <TableHead className="text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredCustomers.map((customer: any) => (
+                        <TableRow key={customer.id} className="hover:bg-muted/30">
+                          <TableCell className="font-semibold">
+                            <span className="text-foreground">{customer.name}</span>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {customer.phone ? (
+                              <span className="text-muted-foreground font-sans">{formatPhoneDisplay(customer.phone)}</span>
+                            ) : (
+                              <span className="text-muted-foreground/60">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="hidden md:table-cell text-xs text-muted-foreground max-w-xs truncate">
+                            {customer.address || "—"}
+                          </TableCell>
+                          <TableCell className="hidden lg:table-cell text-xs text-muted-foreground max-w-xs truncate">
+                            {customer.notes ? (
+                              <span className="bg-amber-50 text-amber-900 border border-amber-200 px-1.5 py-0.5 rounded">
+                                {customer.notes}
+                              </span>
+                            ) : "—"}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {customer.accepts_promotions ? (
+                              <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full font-medium">
+                                <CheckCircle2 className="h-3 w-3" /> Sim
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1.5">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-xs gap-1"
+                                onClick={() => handleOpenHistory(customer)}
+                              >
+                                <FileText className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Histórico</span>
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="h-8 text-xs gap-1"
+                                onClick={() => handleEdit(customer)}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Editar</span>
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               ) : (
+                /* ── MODO CARDS (GRADE) ── */
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {filteredCustomers.map((customer: any) => (
                     <div 
