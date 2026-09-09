@@ -882,6 +882,9 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
     mutationFn: async (opts?: { pendingOnly?: boolean }) => {
       const isPending = opts?.pendingOnly === true;
       if (cart.length === 0) throw new Error("Carrinho vazio");
+      if (sellers.length > 0 && !selectedSeller) {
+        throw new Error("Por favor, selecione o vendedor responsável pela venda.");
+      }
       if (deliveryType === "entrega" && !deliveryAddress.trim()) throw new Error("Informe o endereço de entrega");
       if (isDeliveryMode && !customerName.trim() && !customerId) {
         throw new Error("O nome do cliente é obrigatório para pedidos de Delivery/WhatsApp.");
@@ -1607,19 +1610,28 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                   )}
                 </div>
 
-                {/* Seletor de Vendedora */}
+                {/* Seletor de Vendedora / Vendedor */}
                 {sellers.length > 0 && (
                   <div className="mt-2">
-                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Vendedora</label>
+                    <label className="text-xs font-semibold flex items-center justify-between mb-1">
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        Vendedor(a) <span className="text-destructive font-bold">*</span>
+                      </span>
+                      {!selectedSeller && (
+                        <span className="text-[11px] text-destructive font-normal">Obrigatório</span>
+                      )}
+                    </label>
                     <select
-                      className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      className={`w-full h-9 rounded-md border bg-background px-3 text-sm transition-colors ${
+                        !selectedSeller ? "border-amber-400 bg-amber-50/40 focus:border-primary" : "border-input"
+                      }`}
                       value={selectedSeller?.name ?? ""}
                       onChange={(e) => {
                         const found = sellers.find(s => s.name === e.target.value) || null;
                         setSelectedSeller(found);
                       }}
                     >
-                      <option value="">— Sem vendedora —</option>
+                      <option value="">— Selecione o(a) vendedor(a) —</option>
                       {sellers.map((s) => (
                         <option key={s.name} value={s.name}>
                           {s.name} ({s.commission}%)
@@ -1627,8 +1639,8 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       ))}
                     </select>
                     {selectedSeller && (
-                      <p className="text-xs text-emerald-600 mt-1">
-                        Comissão: R$ {((total * selectedSeller.commission) / 100).toFixed(2)}
+                      <p className="text-xs text-emerald-600 mt-1 font-medium">
+                        Comissão: R$ {((total * selectedSeller.commission) / 100).toFixed(2)} ({selectedSeller.commission}%)
                       </p>
                     )}
                   </div>
