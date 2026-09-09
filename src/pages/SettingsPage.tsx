@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn, getSoundConfig, saveSoundConfig, playNotificationSound, SOUND_OPTIONS, type SoundConfig } from "@/lib/utils";
 import { getLoyaltyPromoConfig, saveLoyaltyPromoConfig, type LoyaltyPromoConfig } from "@/lib/loyalty";
+import { getPromissoriaConfig, savePromissoriaConfig, type PromissoriaConfig } from "@/lib/promissoria";
 import {
   SEFAZ_BY_UF, UF_NAMES, SERVICO_LABELS,
   type SefazServico,
@@ -65,7 +66,7 @@ function maskCnpj(v: string) {
 export default function SettingsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"links" | "integracoes" | "assinatura" | "ifood" | "asaas" | "impressora" | "pdv" | "sons" | "vendedoras" | "mesas" | "seguranca" | "promocoes">("links");
+  const [activeTab, setActiveTab] = useState<"links" | "integracoes" | "assinatura" | "ifood" | "asaas" | "impressora" | "pdv" | "sons" | "vendedoras" | "mesas" | "seguranca" | "promocoes" | "promissoria">("links");
   const [sefazServico, setSefazServico] = useState<SefazServico>("NFeAutorizacao");
   const [showToken, setShowToken] = useState(false);
   const [nfe, setNfe] = useState<NfeConfig>({});
@@ -73,6 +74,15 @@ export default function SettingsPage() {
   const [asaas, setAsaas] = useState<AsaasConfig>({});
   const [nfeLoaded, setNfeLoaded] = useState(false);
   const [mesasConfig, setMesasConfig] = useState({ table_count: 0, has_counters: false, counter_count: 0, table_fee: 0 });
+
+  // ── Promissória & Crediário ──────────────────────────────────────────────────
+  const [promissoriaConfig, setPromissoriaConfig] = useState<PromissoriaConfig>(() => getPromissoriaConfig());
+
+  const savePromissoria = (cfg: PromissoriaConfig) => {
+    setPromissoriaConfig(cfg);
+    savePromissoriaConfig(cfg);
+    toast.success("Configuração de Promissórias salva!");
+  };
 
   // ── Promoções & Fidelidade ──────────────────────────────────────────────────
   const [loyaltyConfig, setLoyaltyConfig] = useState<LoyaltyPromoConfig>(() => getLoyaltyPromoConfig());
@@ -485,6 +495,7 @@ export default function SettingsPage() {
           {([
             { id: "links",       label: "Links da Loja",      icon: Link2,       category: "Geral" },
             { id: "promocoes",   label: "Promoções & Fidelidade", icon: Sparkles, category: "Vendas" },
+            { id: "promissoria", label: "Promissórias & Crediário", icon: FileText, category: "Vendas" },
             { id: "pdv",         label: "Frente de Caixa (PDV)", icon: ShoppingCart, category: "Vendas" },
             { id: "mesas",       label: "Mesas & Comandas",   icon: LayoutGrid,  category: "Vendas" },
             { id: "vendedoras",  label: "Vendedoras",         icon: Users2,      category: "Vendas" },
@@ -876,7 +887,123 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── ABA: INTEGRAÇÕES ────────────────────────────────────────────────── */}
+      {/* ── ABA: PROMISSÓRIA & CREDIÁRIO ───────────────────────────────────── */}
+      {activeTab === "promissoria" && (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <CardTitle className="text-xl flex items-center gap-2 text-indigo-900">
+                    <FileText className="h-5 w-5 text-indigo-600" />
+                    Sistema de Promissória & Venda a Prazo (Crediário)
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Permita que seus clientes comprem a prazo emitindo promissórias com vencimentos em 30, 60, 90 dias ou no pulo do mês.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-50 border p-2 rounded-lg shrink-0">
+                  <span className="text-xs font-semibold text-slate-700">Ativar Promissória:</span>
+                  <input
+                    type="checkbox"
+                    checked={promissoriaConfig.enabled}
+                    onChange={(e) => savePromissoria({ ...promissoriaConfig, enabled: e.target.checked })}
+                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                  Planos e Prazos Permitidos no PDV
+                </Label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    { id: "30", title: "30 Dias", desc: "1 parcela para vencer em 30 dias" },
+                    { id: "30_60", title: "30 / 60 Dias", desc: "2 parcelas (30 e 60 dias)" },
+                    { id: "30_60_90", title: "30 / 60 / 90 Dias", desc: "3 parcelas (30, 60 e 90 dias)" },
+                    { id: "pulo_mes", title: "No Pulo (Mês Seguinte)", desc: "Começa a pagar no dia 10 do próximo mês" },
+                  ].map((plan) => {
+                    const isChecked = promissoriaConfig.allowedPlans?.includes(plan.id as any);
+                    return (
+                      <div
+                        key={plan.id}
+                        onClick={() => {
+                          const current = promissoriaConfig.allowedPlans || [];
+                          const updated = isChecked
+                            ? current.filter((p) => p !== plan.id)
+                            : [...current, plan.id as any];
+                          setPromissoriaConfig({ ...promissoriaConfig, allowedPlans: updated });
+                        }}
+                        className={cn(
+                          "p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between gap-2",
+                          isChecked
+                            ? "border-indigo-600 bg-indigo-50/50 ring-1 ring-indigo-500"
+                            : "border-slate-200 bg-white hover:border-slate-300 opacity-60"
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-sm text-indigo-950">{plan.title}</span>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="h-4 w-4 text-indigo-600 rounded"
+                          />
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{plan.desc}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Exigir CPF/Documento do Cliente na Promissória?</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="checkbox"
+                      id="reqDoc"
+                      checked={promissoriaConfig.requireDocument}
+                      onChange={(e) => setPromissoriaConfig({ ...promissoriaConfig, requireDocument: e.target.checked })}
+                      className="h-4 w-4 text-indigo-600 rounded"
+                    />
+                    <label htmlFor="reqDoc" className="text-xs text-slate-700 cursor-pointer">
+                      Sim, solicitar CPF/RG do cliente para registrar o débito
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Dica / Alerta Informativo */}
+              <div className="rounded-xl bg-indigo-50/60 border border-indigo-100 p-4 text-xs text-indigo-900 space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-sm">
+                  📌 Como funciona a venda com Promissória no PDV:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-slate-700 pl-1">
+                  <li>Ao ativar este recurso, a opção <strong>"Promissória"</strong> aparecerá como forma de pagamento no PDV.</li>
+                  <li>O operador seleciona o cliente cadastrado e escolhe o prazo (30, 60, 90 dias ou No Pulo).</li>
+                  <li>O valor entra no <strong>Relatório de Valores a Receber</strong> para cobrança e controle de quitação.</li>
+                  <li>O cupom fiscal/não fiscal emitirá o termo de confissão de dívida e vencimento das parcelas.</li>
+                </ul>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => savePromissoria(promissoriaConfig)}
+                  className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 shadow-md"
+                >
+                  <Save className="h-4 w-4" />
+                  Salvar Configurações de Promissória
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       {activeTab === "integracoes" && (
         <>
 

@@ -21,7 +21,7 @@ import {
   ShoppingCart, Search, Plus, Minus, Trash2, CreditCard,
   Banknote, QrCode, Receipt, Percent, DollarSign, X, Printer,
   CheckCircle2, Image as ImageIcon, UtensilsCrossed, Edit2, Pencil,
-  History, Ban, RotateCcw, AlertTriangle, Sparkles, Award, Gift,
+  History, Ban, RotateCcw, AlertTriangle, Sparkles, Award, Gift, FileText,
 } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
 import { printToKitchen, buildKitchenReceiptHtml } from "@/lib/electronPrinting";
@@ -29,6 +29,7 @@ import { db } from "@/lib/db";
 import { CustomerSearchModal } from "@/components/Clientes/CustomerSearchModal";
 import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
 import { getLoyaltyPromoConfig, getCustomerPurchasesCount, addCustomerPurchaseStamp, setCustomerPurchasesCount } from "@/lib/loyalty";
+import { getPromissoriaConfig, createPromissoria, calculateInstallments, type PromissoriaInstallment } from "@/lib/promissoria";
 
 type Product = Tables<"products">;
 
@@ -64,6 +65,8 @@ interface SaleTicket {
   trackingUrl?: string;
   sellerName?: string;
   sellerCommission?: number;
+  promissoriaPlan?: string;
+  promissoriaInstallments?: PromissoriaInstallment[];
 }
 
 const fmt = (v: number) =>
@@ -81,6 +84,7 @@ const paymentLabel: Record<string, string> = {
   credit: "CARTÃO CRÉDITO",
   debit: "CARTÃO DÉBITO",
   pix: "PIX",
+  promissoria: "PROMISSÓRIA / A PRAZO",
 };
 
 // ─── Componente Cupom (só para impressão + visualização) ─────────────────────
@@ -223,6 +227,29 @@ function Cupom({ ticket, printRef }: { ticket: SaleTicket; printRef: React.RefOb
         {ticket.deliveryAddress && <p>ENDEREÇO: {ticket.deliveryAddress}</p>}
         {ticket.deliveryNotes && <p>OBS: {ticket.deliveryNotes}</p>}
       </div>
+
+      {/* Termo de Nota Promissória se a forma de pagamento for Promissória */}
+      {ticket.paymentMethod === "promissoria" && ticket.promissoriaInstallments && (
+        <>
+          <div className="border-t border-dashed border-black my-1" />
+          <div className="text-[9px] space-y-1 text-center font-mono">
+            <p className="font-bold text-[10px] uppercase">*** NOTA PROMISSÓRIA / CREDIÁRIO ***</p>
+            <p className="text-[8.5px]">Reconheço e pagarei a quantia total de R$ {ticket.total.toFixed(2).replace(".", ",")}</p>
+            <div className="text-left space-y-0.5 py-1">
+              {ticket.promissoriaInstallments.map((inst) => (
+                <div key={inst.installmentNumber} className="flex justify-between border-b border-dotted border-gray-400 py-0.5">
+                  <span>Parcela {inst.installmentNumber}/{ticket.promissoriaInstallments!.length} - Venc: {new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
+                  <span className="font-bold">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
+                </div>
+              ))}
+            </div>
+            <div className="pt-4 pb-1">
+              <div className="border-b border-black w-4/5 mx-auto" />
+              <p className="text-[8px] mt-0.5 uppercase">Assinatura do Devedor: {ticket.customerName || "Cliente"}</p>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 7. NFC-e Info (Apenas se emitido com chave real autorizada) */}
       {isFiscalEnabled ? (
@@ -532,8 +559,10 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerId, setCustomerId] = useState("");
+  const [customerDocument, setCustomerDocument] = useState("");
   const [customerSearchModalOpen, setCustomerSearchModalOpen] = useState(false);
   const [customerFormModalOpen, setCustomerFormModalOpen] = useState(false);
+  const [promissoriaPlan, setPromissoriaPlan] = useState<"30" | "30_60" | "30_60_90" | "pulo_mes">("30");
   const [deliveryType, setDeliveryType] = useState<"local" | "retirada" | "entrega">(isDeliveryMode ? "entrega" : "local");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [deliveryNotes, setDeliveryNotes] = useState("");
@@ -885,6 +914,12 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
       if (sellers.length > 0 && !selectedSeller) {
         throw new Error("Por favor, selecione o vendedor responsável pela venda.");
       }
+      if (paymentMethod === "promissoria" && !customerName.trim() && !customerId) {
+        throw new Error("Para vender na Promissória/Crediário, é obrigatório informar ou buscar o cliente.");
+      }
+      if (paymentMethod === "promissoria" && promissoriaCfg.requireDocument && !customerDocument.trim()) {
+        throw new Error("É obrigatório informar o CPF/Documento do cliente para venda na Promissória.");
+      }
       if (deliveryType === "entrega" && !deliveryAddress.trim()) throw new Error("Informe o endereço de entrega");
       if (isDeliveryMode && !customerName.trim() && !customerId) {
         throw new Error("O nome do cliente é obrigatório para pedidos de Delivery/WhatsApp.");
@@ -1069,6 +1104,25 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
       refetchRecentSales();
       queryClient.invalidateQueries({ queryKey: ["store-customers"] });
       
+      let generatedInstallments: PromissoriaInstallment[] | undefined;
+      if (paymentMethod === "promissoria") {
+        generatedInstallments = calculateInstallments(total, promissoriaPlan);
+        createPromissoria({
+          storeId: storeId || undefined,
+          saleId: data?.id,
+          customerId: customerId || undefined,
+          customerName: customerName.trim() || "Cliente",
+          customerPhone: customerPhone.trim() || undefined,
+          customerDocument: customerDocument.trim() || undefined,
+          totalAmount: total,
+          plan: promissoriaPlan,
+          installmentsCount: generatedInstallments.length,
+          installments: generatedInstallments,
+          notes: `Venda ${data?.id ? data.id.slice(-4) : 'PDV'} no plano ${promissoriaPlan}`,
+        });
+        toast.info("📜 Nota Promissória registrada no contas a receber!");
+      }
+
       const newTicket: SaleTicket = {
         saleId: data?.id || `off-${Date.now()}`,
         senha: saleCounter,
@@ -1090,7 +1144,11 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
         trackingUrl: data?.trackingUrl,
         sellerName: selectedSeller?.name,
         sellerCommission: selectedSeller?.commission,
+        promissoriaPlan: paymentMethod === "promissoria" ? promissoriaPlan : undefined,
+        promissoriaInstallments: generatedInstallments,
       };
+
+      setCustomerDocument("");
 
       // Salva registro de comissão no localStorage para relatório
       if (selectedSeller && data?.id) {
@@ -1147,11 +1205,14 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
 
+  const promissoriaCfg = getPromissoriaConfig(storeId);
+
   const paymentMethods = [
     { value: "cash", label: "Dinheiro", icon: Banknote },
     { value: "credit", label: "Crédito", icon: CreditCard },
     { value: "debit", label: "Débito", icon: CreditCard },
     { value: "pix", label: "PIX", icon: QrCode },
+    ...(promissoriaCfg.enabled ? [{ value: "promissoria", label: "Promissória", icon: FileText }] : []),
   ];
 
   const tablesEnabled = !isDeliveryMode && ((store?.table_count || 0) > 0 || store?.has_counters);
@@ -1450,21 +1511,68 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                 </div>
 
                 {/* Payment method */}
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className={`grid ${paymentMethods.length > 4 ? "grid-cols-5" : "grid-cols-4"} gap-1.5`}>
                   {paymentMethods.map((pm) => (
                     <button
                       key={pm.value}
                       onClick={() => setPaymentMethod(pm.value)}
                       className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-medium transition-colors ${paymentMethod === pm.value
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border hover:bg-muted"
+                          ? "border-primary bg-primary/10 text-primary font-bold shadow-xs"
+                          : "border-border hover:bg-muted text-muted-foreground"
                         }`}
                     >
                       <pm.icon className="h-4 w-4" />
-                      {pm.label}
+                      <span className="truncate w-full text-center">{pm.label}</span>
                     </button>
                   ))}
                 </div>
+
+                {/* Bloco de Opções da Promissória quando selecionada */}
+                {paymentMethod === "promissoria" && (
+                  <div className="bg-indigo-50/70 border border-indigo-200 p-2.5 rounded-lg space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-indigo-950 flex items-center gap-1">
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                        Condição de Pagamento (Promissória):
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { id: "30", label: "30 Dias (1x)" },
+                        { id: "30_60", label: "30 / 60 Dias (2x)" },
+                        { id: "30_60_90", label: "30 / 60 / 90d (3x)" },
+                        { id: "pulo_mes", label: "No Pulo (Mês que vem)" },
+                      ]
+                        .filter(p => promissoriaCfg.allowedPlans?.includes(p.id as any))
+                        .map(plan => (
+                          <button
+                            key={plan.id}
+                            type="button"
+                            onClick={() => setPromissoriaPlan(plan.id as any)}
+                            className={`p-1.5 rounded border text-left text-[11px] font-medium transition-all ${
+                              promissoriaPlan === plan.id
+                                ? "border-indigo-600 bg-indigo-600 text-white font-bold"
+                                : "border-indigo-200 bg-white text-indigo-900 hover:bg-indigo-50"
+                            }`}
+                          >
+                            {plan.label}
+                          </button>
+                        ))}
+                    </div>
+
+                    {/* Simulação de Parcelas */}
+                    <div className="bg-white/80 border border-indigo-100 rounded p-1.5 space-y-0.5 text-[10px] text-slate-700">
+                      <span className="font-semibold text-indigo-900 block mb-0.5">Vencimento das parcelas:</span>
+                      {calculateInstallments(total, promissoriaPlan).map((inst) => (
+                        <div key={inst.installmentNumber} className="flex justify-between">
+                          <span>{inst.installmentNumber}ª Parcela ({new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}):</span>
+                          <span className="font-bold text-indigo-950">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Totals */}
                 <div className="space-y-1 text-sm">
@@ -1490,10 +1598,10 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                   <div className="flex gap-2">
                     <div className="grid grid-cols-2 gap-2 flex-1">
                       <Input 
-                        placeholder="Nome do Cliente (Opcional)" 
+                        placeholder={paymentMethod === "promissoria" ? "Nome do Cliente *" : "Nome do Cliente (Opcional)"} 
                         value={customerName}
                         onChange={e => setCustomerName(e.target.value)}
-                        className="h-8 text-xs"
+                        className={`h-8 text-xs ${paymentMethod === "promissoria" && !customerName ? "border-amber-400 bg-amber-50/30" : ""}`}
                       />
                       <Input 
                         placeholder="Telefone (Opcional)" 
@@ -1511,6 +1619,15 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       Buscar
                     </Button>
                   </div>
+
+                  {paymentMethod === "promissoria" && (
+                    <Input 
+                      placeholder={promissoriaCfg.requireDocument ? "CPF / RG do Cliente (Obrigatório) *" : "CPF / RG do Cliente (Opcional)"}
+                      value={customerDocument}
+                      onChange={e => setCustomerDocument(e.target.value)}
+                      className={`h-8 text-xs ${promissoriaCfg.requireDocument && !customerDocument ? "border-amber-400 bg-amber-50/30" : ""}`}
+                    />
+                  )}
 
                   {/* Banner de Fidelidade do Cliente Selecionado */}
                   {(() => {
