@@ -614,6 +614,12 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
     },
   });
 
+  useEffect(() => {
+    if (store && (!store.table_count || Number(store.table_count) <= 0) && deliveryType === "local" && !isDeliveryMode) {
+      setDeliveryType("retirada");
+    }
+  }, [store, deliveryType, isDeliveryMode]);
+
   // Busca vendas pendentes para as mesas
   const { data: pendingSales = [], refetch: refetchPending } = useQuery({
     queryKey: ["sales_pending", storeId],
@@ -1515,26 +1521,33 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       </div>
                     );
                   })()}
-                  <div className="grid grid-cols-3 gap-1">
-                    <button 
-                        onClick={() => setDeliveryType("local")}
-                        className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "local" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
-                    >
-                        Mesa
-                    </button>
-                    <button 
-                        onClick={() => setDeliveryType("retirada")}
-                        className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "retirada" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
-                    >
-                        Retirada
-                    </button>
-                    <button 
-                        onClick={() => setDeliveryType("entrega")}
-                        className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "entrega" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
-                    >
-                        Entrega
-                    </button>
-                  </div>
+                  {(() => {
+                    const hasTables = Boolean(store?.table_count && Number(store.table_count) > 0);
+                    return (
+                      <div className={`grid ${hasTables ? "grid-cols-3" : "grid-cols-2"} gap-1`}>
+                        {hasTables && (
+                          <button 
+                              onClick={() => setDeliveryType("local")}
+                              className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "local" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                          >
+                              Mesa
+                          </button>
+                        )}
+                        <button 
+                            onClick={() => setDeliveryType("retirada")}
+                            className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "retirada" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                        >
+                            Loja
+                        </button>
+                        <button 
+                            onClick={() => setDeliveryType("entrega")}
+                            className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "entrega" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                        >
+                            Entrega
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {deliveryType === "entrega" && (
                     <>
                       <Input 
