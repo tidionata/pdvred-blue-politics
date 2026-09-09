@@ -142,19 +142,35 @@ export default function DashboardLayout() {
     return () => syncEngine.stop();
   }, [profile?.store_id]);
 
-  const { data: storeConfig } = useQuery({
-    queryKey: ["store-config", profile?.store_id],
+  const { data: storeData, isLoading: storeLoading } = useQuery({
+    queryKey: ["store-license-status", profile?.store_id],
     enabled: !!profile?.store_id,
+    refetchInterval: 30000, // Checa a cada 30 segundos se a loja foi bloqueada pelo admin
     queryFn: async () => {
       const { data, error } = await supabase
         .from("stores")
-        .select("config_orcamento")
+        .select("id, name, config_orcamento, status, expires_at, block_reason, master_admin_password")
         .eq("id", profile!.store_id!)
         .single();
-      if (error) throw error;
+      if (error) {
+        console.warn("Aviso ao verificar status da loja:", error);
+        return null;
+      }
       return data;
     },
   });
+
+  const storeConfig = storeData;
+  const isStoreBlocked = storeData?.status === "blocked" || storeData?.status === "suspended";
+  const isStoreExpired = storeData?.expires_at ? new Date(storeData.expires_at).getTime() < Date.now() : false;
+  const shouldBlockAccess = isStoreBlocked || isStoreExpired;
+
+  // Atualiza a senha master da loja sincronizada com o Super Admin se houver
+  useEffect(() => {
+    if (storeData?.master_admin_password) {
+      localStorage.setItem("pdv_admin_password", storeData.master_admin_password);
+    }
+  }, [storeData?.master_admin_password]);
 
   const userRole = sessionStorage.getItem("pdv_user_role");
   const isFuncionario = userRole === "funcionario";
@@ -220,6 +236,54 @@ export default function DashboardLayout() {
     },
   });
   const pendingCount = pendingOrders.length;
+
+  if (shouldBlockAccess) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-red-500/30 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl space-y-6">
+          <div className="w-16 h-16 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold text-white tracking-tight">Acesso Temporariamente Suspenso</h2>
+            <p className="text-sm text-slate-400">
+              {storeData?.block_reason || "A licença de uso do sistema para este estabelecimento está expirada ou pendente de regularização."}
+            </p>
+          </div>
+
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-xs text-slate-300 text-left space-y-1.5">
+            <p className="font-semibold text-white">Como restabelecer o acesso?</p>
+            <p>Entre em contato com o suporte ou com a administração do sistema para renovar sua licença.</p>
+            {storeData?.expires_at && (
+              <p className="text-[11px] text-amber-400 font-mono pt-1">
+                Data de expiração: {new Date(storeData.expires_at).toLocaleDateString("pt-BR")}
+              </p>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => window.location.reload()}
+              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Verificar Novamente
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={signOut}
+              className="flex-1"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Sair
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-background">
