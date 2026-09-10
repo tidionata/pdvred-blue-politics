@@ -58,6 +58,11 @@ import {
   QrCode,
   ArrowUpRight,
   Filter,
+  Vault,
+  ArrowDownLeft,
+  Printer,
+  History,
+  Info,
 } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
@@ -69,6 +74,12 @@ import {
   type Promissoria,
   type PromissoriaInstallment,
 } from "@/lib/promissoria";
+import {
+  getCaixaHistory,
+  getActiveCaixa,
+  recordPromissoriaPaymentInCaixa,
+  type CaixaSession,
+} from "@/lib/caixa";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 const fmt = (v: number) =>
@@ -124,7 +135,7 @@ interface TopProduct {
 }
 
 type PeriodKey = "7d" | "30d" | "90d" | "mes_atual" | "mes_passado";
-type ReportTab = "dia" | "produtos" | "receber" | "geral";
+type ReportTab = "dia" | "produtos" | "receber" | "caixa" | "geral";
 
 const PERIOD_OPTIONS: { value: PeriodKey; label: string }[] = [
   { value: "mes_atual", label: "Mês atual" },
@@ -242,10 +253,24 @@ export default function Reports() {
   const [selectedInstallmentNumber, setSelectedInstallmentNumber] = useState<number>(1);
   const [installmentPayMethod, setInstallmentPayMethod] = useState<string>("dinheiro");
 
+  // ── Controle de Caixas & Turnos ──
+  const [caixaHistoryList, setCaixaHistoryList] = useState<CaixaSession[]>([]);
+  const [activeCaixaState, setActiveCaixaState] = useState<CaixaSession | null>(null);
+  const [selectedCaixaDetail, setSelectedCaixaDetail] = useState<CaixaSession | null>(null);
+  const [caixaDetailModalOpen, setCaixaDetailModalOpen] = useState(false);
+
   // Recarregar Promissórias
   const loadPromissorias = () => {
     const list = getAllPromissorias(storeId || undefined);
     setPromissoriasList(list);
+  };
+
+  // Recarregar Caixas
+  const loadCaixas = () => {
+    const history = getCaixaHistory(storeId || undefined);
+    const active = getActiveCaixa(storeId || undefined);
+    setCaixaHistoryList(history);
+    setActiveCaixaState(active);
   };
 
   // Carrega vendas de um dia específico
@@ -302,6 +327,7 @@ export default function Reports() {
       // Carrega vendas do dia inicial
       loadDaySales(selectedDay, sid);
       loadPromissorias();
+      loadCaixas();
 
       // Fetch sales do período
       const { data: sales } = await supabase
@@ -438,14 +464,26 @@ export default function Reports() {
   // Quitar Parcela de Promissória
   const handleConfirmInstallmentPayment = () => {
     if (!selectedPromissoriaForPayment) return;
+    const inst = selectedPromissoriaForPayment.installments.find(i => i.installmentNumber === selectedInstallmentNumber);
+    const amount = inst ? inst.amount : 0;
+
     const updated = payInstallment(
       selectedPromissoriaForPayment.id,
       selectedInstallmentNumber,
       installmentPayMethod
     );
     if (updated) {
+      // Se foi recebida e há um caixa aberto, integra no caixa
+      recordPromissoriaPaymentInCaixa(
+        storeId || undefined,
+        installmentPayMethod,
+        amount,
+        selectedPromissoriaForPayment.customerName
+      );
+
       toast.success("Parcela recebida e baixada com sucesso!");
       loadPromissorias();
+      loadCaixas();
       setPaymentModalOpen(false);
       setSelectedPromissoriaForPayment(null);
     } else {
@@ -585,7 +623,7 @@ export default function Reports() {
             Central de Relatórios & Financeiro
           </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            {storeName || "Minha Loja"} · Acompanhe vendas, produtos e valores a receber
+            {storeName || "Minha Loja"} · Acompanhe vendas, produtos, caixas e crediário
           </p>
         </div>
 
@@ -628,6 +666,7 @@ export default function Reports() {
           { id: "dia", label: "Relatório do Dia", icon: Calendar, desc: "Vendas e fechamento diário" },
           { id: "produtos", label: "Produtos Mais Vendidos", icon: Package, desc: "Ranking de itens mais saídos" },
           { id: "receber", label: "Valores a Receber (Promissórias)", icon: HandCoins, desc: "Crediário e cobranças" },
+          { id: "caixa", label: "Controle de Caixas / Turnos", icon: Vault, desc: "Aberturas, sangrias e fechamentos" },
           { id: "geral", label: "Visão Geral & Gráficos", icon: TrendingUp, desc: "Faturamento e comparativos" },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -679,122 +718,111 @@ export default function Reports() {
                 </div>
               </div>
 
-              <div className="flex gap-4 sm:gap-6 flex-wrap">
-                <div className="bg-white px-4 py-2.5 rounded-xl border border-blue-100 shadow-xs">
-                  <p className="text-[11px] font-semibold text-muted-foreground uppercase">Faturamento do Dia</p>
-                  <p className="text-xl font-extrabold text-emerald-600">{fmt(dayTotalFat)}</p>
+              <div className="flex items-center gap-6 border-t sm:border-t-0 sm:border-l border-blue-200 pt-3 sm:pt-0 sm:pl-6">
+                <div>
+                  <p className="text-xs text-muted-foreground">Faturamento do Dia</p>
+                  <p className="text-2xl font-black text-blue-950">{fmt(dayTotalFat)}</p>
                 </div>
-                <div className="bg-white px-4 py-2.5 rounded-xl border border-blue-100 shadow-xs">
-                  <p className="text-[11px] font-semibold text-muted-foreground uppercase">Vendas Realizadas</p>
-                  <p className="text-xl font-extrabold text-indigo-900">{dayVendasCount}</p>
+                <div>
+                  <p className="text-xs text-muted-foreground">Vendas Concluídas</p>
+                  <p className="text-2xl font-black text-slate-800">{dayVendasCount}</p>
                 </div>
-                <div className="bg-white px-4 py-2.5 rounded-xl border border-blue-100 shadow-xs">
-                  <p className="text-[11px] font-semibold text-muted-foreground uppercase">Ticket Médio</p>
-                  <p className="text-xl font-extrabold text-cyan-600">{fmt(dayTicketMedio)}</p>
+                <div>
+                  <p className="text-xs text-muted-foreground">Ticket Médio</p>
+                  <p className="text-2xl font-black text-emerald-700">{fmt(dayTicketMedio)}</p>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Formas de Pagamento no Dia */}
+          {/* Formas de pagamento no dia */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: "Dinheiro", val: dayByPayment["cash"] || 0, icon: Banknote, color: "text-emerald-700 bg-emerald-50" },
-              { label: "PIX", val: dayByPayment["pix"] || 0, icon: QrCode, color: "text-teal-700 bg-teal-50" },
-              { label: "Cartão Débito/Crédito", val: (dayByPayment["credit"] || 0) + (dayByPayment["debit"] || 0) + (dayByPayment["card"] || 0), icon: CreditCard, color: "text-blue-700 bg-blue-50" },
-              { label: "Promissória / Prazo", val: dayByPayment["promissoria"] || 0, icon: FileText, color: "text-indigo-700 bg-indigo-50" },
-            ].map((p, idx) => (
-              <Card key={idx} className="border border-slate-100">
-                <CardContent className="p-3.5 flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl ${p.color}`}>
-                    <p.icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-[11px] text-muted-foreground font-medium">{p.label}</p>
-                    <p className="text-base font-bold text-slate-800">{fmt(p.val)}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+              { key: "cash", label: "Dinheiro (Gaveta)", icon: Banknote, color: "text-emerald-700", bg: "bg-emerald-50 border-emerald-200" },
+              { key: "pix", label: "PIX", icon: QrCode, color: "text-teal-700", bg: "bg-teal-50 border-teal-200" },
+              { key: "credit", label: "Cartão Crédito", icon: CreditCard, color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
+              { key: "debit", label: "Cartão Débito", icon: CreditCard, color: "text-indigo-700", bg: "bg-indigo-50 border-indigo-200" },
+              { key: "promissoria", label: "Promissória (A Prazo)", icon: FileText, color: "text-amber-700", bg: "bg-amber-50 border-amber-200" },
+            ].map((pm) => {
+              const val = (dayByPayment[pm.key] || 0) + (pm.key === "cash" ? (dayByPayment["dinheiro"] || 0) : 0);
+              const Icon = pm.icon;
+              return (
+                <Card key={pm.key} className={`border ${pm.bg}`}>
+                  <CardContent className="p-3.5 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-600">{pm.label}</p>
+                      <p className={`text-lg font-bold mt-0.5 ${pm.color}`}>{fmt(val)}</p>
+                    </div>
+                    <div className="p-2 rounded-lg bg-white shadow-xs">
+                      <Icon className={`w-5 h-5 ${pm.color}`} />
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
 
           {/* Lista de Vendas do Dia */}
           <Card>
-            <CardHeader className="pb-3 border-b">
+            <CardHeader className="py-4 border-b">
               <CardTitle className="text-base font-bold flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Receipt className="w-5 h-5 text-primary" />
-                  Todas as Vendas do Dia ({new Date(selectedDay + "T12:00:00").toLocaleDateString("pt-BR")})
-                </span>
-                <Badge variant="secondary">{daySales.length} vendas registradas</Badge>
+                <span>Vendas Realizadas em {new Date(selectedDay + "T12:00:00").toLocaleDateString("pt-BR")}</span>
+                <Badge variant="secondary" className="font-semibold">
+                  {daySales.length} venda(s)
+                </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {loadingDay ? (
-                <div className="p-8 text-center text-muted-foreground text-sm">Carregando vendas do dia...</div>
+                <div className="p-8 text-center text-muted-foreground flex flex-col items-center gap-2">
+                  <RefreshCw className="h-6 w-6 animate-spin text-blue-600" />
+                  <span>Carregando vendas do dia...</span>
+                </div>
               ) : daySales.length === 0 ? (
-                <div className="p-12 text-center text-muted-foreground">
-                  <Receipt className="w-10 h-10 mx-auto opacity-30 mb-2" />
-                  <p className="text-base font-semibold">Nenhuma venda realizada nesta data</p>
-                  <p className="text-xs text-muted-foreground">Selecione outro dia no campo acima para consultar o histórico.</p>
+                <div className="p-12 text-center text-muted-foreground space-y-2">
+                  <Receipt className="h-10 w-10 mx-auto text-slate-300" />
+                  <p className="font-semibold text-slate-700">Nenhuma venda registrada nesta data.</p>
+                  <p className="text-xs">Selecione outro dia ou realize novas vendas no PDV.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left border-b bg-muted/30 text-xs font-semibold text-muted-foreground uppercase">
-                        <th className="py-3 px-4">Horário</th>
-                        <th className="py-3 px-4">ID Venda</th>
-                        <th className="py-3 px-4">Local / Mesa</th>
-                        <th className="py-3 px-4">Forma de Pagamento</th>
-                        <th className="py-3 px-4 text-right">Valor Total</th>
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600 border-b">
+                      <tr>
+                        <th className="px-4 py-3">Horário</th>
+                        <th className="px-4 py-3">Venda / Cupom</th>
+                        <th className="px-4 py-3">Local / Mesa</th>
+                        <th className="px-4 py-3">Forma de Pagto</th>
+                        <th className="px-4 py-3 text-right">Valor Total</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
+                    <tbody className="divide-y divide-slate-100">
                       {daySales.map((sale) => (
-                        <tr key={sale.id} className="hover:bg-muted/20 transition-colors">
-                          <td className="py-3 px-4 font-mono text-xs text-muted-foreground">
+                        <tr key={sale.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs text-slate-500">
                             {new Date(sale.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
                           </td>
-                          <td className="py-3 px-4 font-mono font-bold text-xs text-slate-700">
+                          <td className="px-4 py-3 font-semibold text-slate-900">
                             #{sale.id.slice(-6).toUpperCase()}
                           </td>
-                          <td className="py-3 px-4 text-xs font-medium">
-                            {sale.table_name ? (
-                              <Badge variant="outline" className="border-blue-300 text-blue-700 bg-blue-50">
-                                {sale.table_name}
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground">Balcão / Loja</span>
-                            )}
+                          <td className="px-4 py-3 text-slate-600 text-xs">
+                            {sale.table_name || "Balcão / Direta"}
                           </td>
-                          <td className="py-3 px-4 text-xs">
+                          <td className="px-4 py-3">
                             <Badge
-                              variant="secondary"
-                              className={
-                                sale.payment_method === "pix"
-                                  ? "bg-teal-100 text-teal-800"
-                                  : sale.payment_method === "cash"
-                                  ? "bg-emerald-100 text-emerald-800"
-                                  : sale.payment_method === "promissoria"
-                                  ? "bg-indigo-100 text-indigo-800"
-                                  : "bg-blue-100 text-blue-800"
-                              }
+                              variant="outline"
+                              className={`text-xs uppercase font-medium ${
+                                sale.payment_method === "promissoria"
+                                  ? "border-amber-400 text-amber-800 bg-amber-50"
+                                  : "border-slate-300 text-slate-700"
+                              }`}
                             >
-                              {sale.payment_method === "cash"
-                                ? "Dinheiro"
-                                : sale.payment_method === "credit"
-                                ? "Cartão Crédito"
-                                : sale.payment_method === "debit"
-                                ? "Cartão Débito"
-                                : sale.payment_method === "pix"
-                                ? "PIX"
-                                : sale.payment_method === "promissoria"
+                              {sale.payment_method === "promissoria"
                                 ? "Promissória"
-                                : sale.payment_method || "Outros"}
+                                : sale.payment_method || "Dinheiro"}
                             </Badge>
                           </td>
-                          <td className="py-3 px-4 text-right font-bold text-emerald-600">
+                          <td className="px-4 py-3 text-right font-bold text-slate-900">
                             {fmt(Number(sale.total))}
                           </td>
                         </tr>
@@ -812,111 +840,82 @@ export default function Reports() {
       {activeTab === "produtos" && (
         <div className="space-y-6">
           <Card>
-            <CardHeader className="pb-3 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base font-bold flex items-center gap-2">
-                  <Package className="w-5 h-5 text-primary" />
-                  Ranking de Produtos Mais Vendidos
-                </CardTitle>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Lista ordenada pela quantidade de unidades vendidas no período ({periodLabel})
-                </p>
+            <CardHeader className="pb-3 border-b">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-lg font-bold flex items-center gap-2">
+                    <Package className="h-5 w-5 text-indigo-600" />
+                    Ranking dos Produtos Mais Vendidos
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Ordenado por volume total de vendas no período selecionado ({periodLabel})
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-xs w-fit">
+                  {topProducts.length} itens vendidos
+                </Badge>
               </div>
-              <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
-                <SelectTrigger className="w-[160px] bg-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PERIOD_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </CardHeader>
             <CardContent className="p-0">
               {loading ? (
-                <div className="p-8 text-center text-muted-foreground text-sm">Carregando ranking de produtos...</div>
+                <div className="p-8 text-center text-muted-foreground">Carregando dados dos produtos...</div>
               ) : topProducts.length === 0 ? (
-                <div className="p-12 text-center text-muted-foreground">Nenhuma venda encontrada no período.</div>
+                <div className="p-12 text-center text-muted-foreground space-y-2">
+                  <Package className="h-10 w-10 mx-auto text-slate-300" />
+                  <p className="font-semibold text-slate-700">Nenhum produto vendido no período.</p>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left border-b bg-muted/30 text-xs font-semibold text-muted-foreground uppercase">
-                        <th className="py-3 px-4 w-12 text-center">Posição</th>
-                        <th className="py-3 px-4">Nome do Produto</th>
-                        <th className="py-3 px-4 text-right">Qtd Vendida</th>
-                        <th className="py-3 px-4 text-right">Faturamento Total</th>
-                        <th className="py-3 px-4 text-right">Lucro Estimado</th>
-                        <th className="py-3 px-4 text-right">Margem</th>
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600 border-b">
+                      <tr>
+                        <th className="px-4 py-3 w-12 text-center"># Pos</th>
+                        <th className="px-4 py-3">Produto</th>
+                        <th className="px-4 py-3 text-center">Qtd. Vendida</th>
+                        <th className="px-4 py-3 text-right">Faturamento Total</th>
+                        <th className="px-4 py-3 text-right">Lucro Estimado</th>
+                        <th className="px-4 py-3 text-right">Margem</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
-                      {topProducts.map((p, i) => {
+                    <tbody className="divide-y divide-slate-100">
+                      {topProducts.map((p, idx) => {
                         const margem = p.faturamento > 0 ? (p.lucro / p.faturamento) * 100 : 0;
                         return (
-                          <tr key={i} className="hover:bg-muted/20 transition-colors">
-                            <td className="py-3 px-4 text-center">
-                              <span
-                                className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                                  i === 0
-                                    ? "bg-amber-100 text-amber-800 border border-amber-300"
-                                    : i === 1
-                                    ? "bg-slate-200 text-slate-800"
-                                    : i === 2
-                                    ? "bg-orange-100 text-orange-800"
-                                    : "text-muted-foreground"
-                                }`}
-                              >
-                                {i + 1}º
-                              </span>
+                          <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="px-4 py-3 text-center font-bold text-xs text-slate-400">
+                              {idx === 0 && <span className="text-amber-500 font-extrabold text-sm">🥇 1º</span>}
+                              {idx === 1 && <span className="text-slate-400 font-extrabold text-sm">🥈 2º</span>}
+                              {idx === 2 && <span className="text-amber-700 font-extrabold text-sm">🥉 3º</span>}
+                              {idx > 2 && `${idx + 1}º`}
                             </td>
-                            <td className="py-3 px-4 font-semibold text-slate-900">{p.name}</td>
-                            <td className="py-3 px-4 text-right font-bold text-slate-800">
+                            <td className="px-4 py-3 font-semibold text-slate-900">
+                              {p.name}
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold text-indigo-700">
                               {p.quantidade} un
                             </td>
-                            <td className="py-3 px-4 text-right font-bold text-emerald-600">
+                            <td className="px-4 py-3 text-right font-medium text-slate-900">
                               {fmt(p.faturamento)}
                             </td>
-                            <td className="py-3 px-4 text-right font-bold text-violet-600">
+                            <td className="px-4 py-3 text-right font-bold text-emerald-700">
                               {fmt(p.lucro)}
                             </td>
-                            <td className="py-3 px-4 text-right">
-                              <span
-                                className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            <td className="px-4 py-3 text-right">
+                              <Badge
+                                variant="outline"
+                                className={`text-xs ${
                                   margem >= 40
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : margem >= 20
-                                    ? "bg-amber-100 text-amber-700"
-                                    : "bg-red-100 text-red-700"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                                    : "bg-blue-50 text-blue-700 border-blue-200"
                                 }`}
                               >
                                 {margem.toFixed(1)}%
-                              </span>
+                              </Badge>
                             </td>
                           </tr>
                         );
                       })}
                     </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-slate-200 bg-slate-50/80 font-bold">
-                        <td colSpan={2} className="py-3 px-4 text-xs uppercase text-muted-foreground">
-                          Total Geral dos Produtos
-                        </td>
-                        <td className="py-3 px-4 text-right text-slate-900">
-                          {topProducts.reduce((s, p) => s + p.quantidade, 0)} un
-                        </td>
-                        <td className="py-3 px-4 text-right text-emerald-600">
-                          {fmt(topProducts.reduce((s, p) => s + p.faturamento, 0))}
-                        </td>
-                        <td className="py-3 px-4 text-right text-violet-600">
-                          {fmt(topProducts.reduce((s, p) => s + p.lucro, 0))}
-                        </td>
-                        <td />
-                      </tr>
-                    </tfoot>
                   </table>
                 </div>
               )}
@@ -925,207 +924,198 @@ export default function Reports() {
         </div>
       )}
 
-      {/* 3. ABA: RELATÓRIO DE VALORES A RECEBER (PROMISSÓRIAS / CREDIÁRIO) */}
+      {/* 3. ABA: VALORES A RECEBER (PROMISSÓRIAS / CREDIÁRIO) */}
       {activeTab === "receber" && (
         <div className="space-y-6">
-          {/* Cards de Resumo do Crediário */}
+          {/* Cards de Resumo */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Card className="bg-amber-50/60 border-amber-200">
-              <CardContent className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-amber-800 uppercase">Total a Receber (Pendente)</p>
-                  <p className="text-2xl font-extrabold text-amber-600 mt-1">{fmt(totalReceberPendente)}</p>
-                  <p className="text-[11px] text-amber-700 mt-0.5">Promissórias em aberto</p>
+            <Card className="bg-amber-500/10 border-amber-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-bold uppercase tracking-wider text-amber-800">
+                  Total Pendente a Receber
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl sm:text-3xl font-black text-amber-900">
+                  {fmt(totalReceberPendente)}
                 </div>
-                <div className="p-3 bg-amber-500/10 rounded-xl text-amber-600">
-                  <HandCoins className="w-7 h-7" />
-                </div>
+                <p className="text-xs text-amber-700/90 mt-1">
+                  Promissórias em aberto aguardando pagamento
+                </p>
               </CardContent>
             </Card>
 
-            <Card className="bg-emerald-50/60 border-emerald-200">
-              <CardContent className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-emerald-800 uppercase">Total Já Recebido</p>
-                  <p className="text-2xl font-extrabold text-emerald-600 mt-1">{fmt(totalJaRecebidoPromissoria)}</p>
-                  <p className="text-[11px] text-emerald-700 mt-0.5">Parcelas quitadas</p>
+            <Card className="bg-emerald-500/10 border-emerald-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-bold uppercase tracking-wider text-emerald-800">
+                  Total Já Recebido / Quitado
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl sm:text-3xl font-black text-emerald-900">
+                  {fmt(totalJaRecebidoPromissoria)}
                 </div>
-                <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-600">
-                  <CheckCircle2 className="w-7 h-7" />
-                </div>
+                <p className="text-xs text-emerald-700/90 mt-1">
+                  Parcelas pagas pelos clientes
+                </p>
               </CardContent>
             </Card>
 
-            <Card className="bg-indigo-50/60 border-indigo-200">
-              <CardContent className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-indigo-800 uppercase">Promissórias Emitidas</p>
-                  <p className="text-2xl font-extrabold text-indigo-600 mt-1">{promissoriasList.length}</p>
-                  <p className="text-[11px] text-indigo-700 mt-0.5">Total de clientes a prazo</p>
+            <Card className="bg-indigo-500/10 border-indigo-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-bold uppercase tracking-wider text-indigo-800">
+                  Total de Contratos / Devedores
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl sm:text-3xl font-black text-indigo-900">
+                  {promissoriasAtivas.length}
                 </div>
-                <div className="p-3 bg-indigo-500/10 rounded-xl text-indigo-600">
-                  <FileText className="w-7 h-7" />
-                </div>
+                <p className="text-xs text-indigo-700/90 mt-1">
+                  Cadastros de compras a prazo emitidas
+                </p>
               </CardContent>
             </Card>
           </div>
 
           {/* Filtros e Busca */}
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-            <div className="relative w-full sm:w-80">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Buscar por cliente, telefone ou CPF..."
+                placeholder="Buscar por nome do cliente, telefone ou documento (CPF/RG)..."
                 value={promissoriaSearch}
                 onChange={(e) => setPromissoriaSearch(e.target.value)}
                 className="pl-9 bg-white"
               />
             </div>
-
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex gap-2 w-full sm:w-auto">
               <Button
-                variant={promissoriaFilterStatus === "all" ? "default" : "outline"}
                 size="sm"
+                variant={promissoriaFilterStatus === "all" ? "default" : "outline"}
                 onClick={() => setPromissoriaFilterStatus("all")}
                 className="text-xs"
               >
-                Todas
+                Todos ({promissoriasList.length})
               </Button>
               <Button
-                variant={promissoriaFilterStatus === "pending" ? "default" : "outline"}
                 size="sm"
+                variant={promissoriaFilterStatus === "pending" ? "default" : "outline"}
                 onClick={() => setPromissoriaFilterStatus("pending")}
-                className="text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                className="text-xs"
               >
                 Pendentes
               </Button>
               <Button
-                variant={promissoriaFilterStatus === "paid" ? "default" : "outline"}
                 size="sm"
+                variant={promissoriaFilterStatus === "paid" ? "default" : "outline"}
                 onClick={() => setPromissoriaFilterStatus("paid")}
-                className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="text-xs"
               >
-                Pagas / Quitadas
+                Quitados
               </Button>
             </div>
           </div>
 
-          {/* Lista de Promissórias */}
+          {/* Tabela de Promissórias */}
           <Card>
-            <CardHeader className="pb-3 border-b">
-              <CardTitle className="text-base font-bold flex items-center justify-between">
-                <span>Lista de Promissórias e Carnês a Receber</span>
-                <Badge variant="outline">{filteredPromissorias.length} encontradas</Badge>
+            <CardHeader className="py-4 border-b">
+              <CardTitle className="text-base font-bold flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-600" />
+                Notas Promissórias & Crediário dos Clientes
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {filteredPromissorias.length === 0 ? (
-                <div className="p-12 text-center text-muted-foreground">
-                  <FileText className="w-10 h-10 mx-auto opacity-30 mb-2" />
-                  <p className="text-base font-semibold">Nenhuma nota promissória encontrada</p>
-                  <p className="text-xs text-muted-foreground">
-                    Quando você realizar uma venda com a opção "Promissória" no PDV, ela aparecerá aqui automaticamente.
-                  </p>
+                <div className="p-12 text-center text-muted-foreground space-y-2">
+                  <HandCoins className="h-10 w-10 mx-auto text-slate-300" />
+                  <p className="font-semibold text-slate-700">Nenhuma promissória encontrada.</p>
+                  <p className="text-xs">Quando uma venda for realizada com forma de pagamento "Promissória", ela aparecerá aqui.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left border-b bg-muted/30 text-xs font-semibold text-muted-foreground uppercase">
-                        <th className="py-3 px-4">Cliente</th>
-                        <th className="py-3 px-4">Data Emissão</th>
-                        <th className="py-3 px-4">Plano</th>
-                        <th className="py-3 px-4">Parcelas / Vencimentos</th>
-                        <th className="py-3 px-4 text-right">Valor Total</th>
-                        <th className="py-3 px-4 text-center">Status</th>
-                        <th className="py-3 px-4 text-center">Ações</th>
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600 border-b">
+                      <tr>
+                        <th className="px-4 py-3">Cliente / Contato</th>
+                        <th className="px-4 py-3">Emissão</th>
+                        <th className="px-4 py-3">Plano</th>
+                        <th className="px-4 py-3">Valor Total</th>
+                        <th className="px-4 py-3">Parcelas & Vencimentos</th>
+                        <th className="px-4 py-3 text-center">Status</th>
+                        <th className="px-4 py-3 text-right">Ação</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
-                      {filteredPromissorias.map((prom) => {
-                        const pendentes = prom.installments.filter((i) => i.status === "pending").length;
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredPromissorias.map((p) => {
+                        const pendentes = p.installments.filter((i) => i.status === "pending").length;
                         return (
-                          <tr key={prom.id} className="hover:bg-muted/20 transition-colors">
-                            <td className="py-3 px-4">
-                              <p className="font-bold text-slate-900">{prom.customerName}</p>
-                              {prom.customerPhone && (
-                                <p className="text-xs text-muted-foreground">Tel: {prom.customerPhone}</p>
-                              )}
-                              {prom.customerDocument && (
-                                <p className="text-[11px] text-muted-foreground">Doc: {prom.customerDocument}</p>
-                              )}
+                          <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="px-4 py-3">
+                              <p className="font-bold text-slate-900">{p.customerName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {p.customerPhone || "Sem telefone"} {p.customerDocument ? `· Doc: ${p.customerDocument}` : ""}
+                              </p>
                             </td>
-                            <td className="py-3 px-4 text-xs text-muted-foreground">
-                              {fmtDate(prom.createdAt)}
+                            <td className="px-4 py-3 text-xs text-slate-600">
+                              {new Date(p.createdAt).toLocaleDateString("pt-BR")}
                             </td>
-                            <td className="py-3 px-4 text-xs font-semibold text-indigo-900">
-                              {prom.plan === "30"
-                                ? "30 Dias (1x)"
-                                : prom.plan === "30_60"
-                                ? "30/60d (2x)"
-                                : prom.plan === "30_60_90"
-                                ? "30/60/90d (3x)"
-                                : "No Pulo"}
+                            <td className="px-4 py-3">
+                              <Badge variant="outline" className="text-xs bg-slate-50">
+                                {p.plan === "pulo_mes" ? "No Pulo (Mês Seguinte)" : `${p.plan.replace(/_/g, "/")} Dias`}
+                              </Badge>
                             </td>
-                            <td className="py-3 px-4">
+                            <td className="px-4 py-3 font-bold text-slate-900">
+                              {fmt(p.totalAmount)}
+                            </td>
+                            <td className="px-4 py-3">
                               <div className="space-y-1">
-                                {prom.installments.map((inst) => (
+                                {p.installments.map((inst) => (
                                   <div
                                     key={inst.installmentNumber}
-                                    className="flex items-center gap-2 text-xs"
+                                    className={`text-xs px-2 py-0.5 rounded border flex items-center justify-between gap-2 ${
+                                      inst.status === "paid"
+                                        ? "bg-emerald-50 border-emerald-200 text-emerald-800 line-through opacity-75"
+                                        : "bg-amber-50 border-amber-200 text-amber-900 font-semibold"
+                                    }`}
                                   >
-                                    <Badge
-                                      variant={inst.status === "paid" ? "secondary" : "outline"}
-                                      className={`text-[10px] px-1.5 py-0 ${
-                                        inst.status === "paid"
-                                          ? "bg-emerald-100 text-emerald-800"
-                                          : "border-amber-400 text-amber-700 bg-amber-50"
-                                      }`}
-                                    >
-                                      {inst.status === "paid" ? "Paga" : "Pendente"}
-                                    </Badge>
-                                    <span className="text-muted-foreground">
-                                      {inst.installmentNumber}ª: {new Date(inst.dueDate + "T12:00:00").toLocaleDateString("pt-BR")}
+                                    <span>
+                                      {inst.installmentNumber}ª Parc ({fmtDate(inst.dueDate)}): {fmt(inst.amount)}
                                     </span>
-                                    <span className="font-bold">{fmt(inst.amount)}</span>
+                                    <span>{inst.status === "paid" ? " Pago" : " Pendente"}</span>
                                   </div>
                                 ))}
                               </div>
                             </td>
-                            <td className="py-3 px-4 text-right font-bold text-base text-slate-900">
-                              {fmt(prom.totalAmount)}
+                            <td className="px-4 py-3 text-center">
+                              {p.status === "paid" && (
+                                <Badge className="bg-emerald-600 text-white hover:bg-emerald-700">Quitada</Badge>
+                              )}
+                              {p.status === "partially_paid" && (
+                                <Badge className="bg-blue-600 text-white hover:bg-blue-700">Parcial ({pendentes} rest.)</Badge>
+                              )}
+                              {p.status === "pending" && (
+                                <Badge className="bg-amber-600 text-white hover:bg-amber-700">Pendente</Badge>
+                              )}
+                              {p.status === "cancelled" && (
+                                <Badge variant="destructive">Cancelada</Badge>
+                              )}
                             </td>
-                            <td className="py-3 px-4 text-center">
-                              <Badge
-                                className={
-                                  prom.status === "paid"
-                                    ? "bg-emerald-600 text-white"
-                                    : prom.status === "partially_paid"
-                                    ? "bg-blue-600 text-white"
-                                    : "bg-amber-500 text-white"
-                                }
-                              >
-                                {prom.status === "paid"
-                                  ? "Quitada"
-                                  : prom.status === "partially_paid"
-                                  ? "Parcial"
-                                  : "Em Aberto"}
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              {prom.status !== "paid" && (
+                            <td className="px-4 py-3 text-right">
+                              {p.status !== "paid" && p.status !== "cancelled" && (
                                 <Button
                                   size="sm"
                                   onClick={() => {
-                                    setSelectedPromissoriaForPayment(prom);
-                                    const nextPending = prom.installments.find((i) => i.status === "pending");
-                                    setSelectedInstallmentNumber(nextPending?.installmentNumber || 1);
+                                    setSelectedPromissoriaForPayment(p);
+                                    // Pega a primeira parcela pendente
+                                    const firstPending = p.installments.find((i) => i.status === "pending");
+                                    setSelectedInstallmentNumber(firstPending ? firstPending.installmentNumber : 1);
                                     setPaymentModalOpen(true);
                                   }}
-                                  className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1 font-semibold"
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold gap-1"
                                 >
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  Receber
+                                  <HandCoins className="w-3.5 h-3.5" />
+                                  Receber Parcela
                                 </Button>
                               )}
                             </td>
@@ -1139,64 +1129,60 @@ export default function Reports() {
             </CardContent>
           </Card>
 
-          {/* Modal de Baixa / Receber Parcela */}
+          {/* Modal de Baixa / Pagamento de Parcela */}
           <Dialog open={paymentModalOpen} onOpenChange={setPaymentModalOpen}>
-            <DialogContent className="max-w-md">
+            <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle className="flex items-center gap-2 text-indigo-900">
-                  <HandCoins className="w-5 h-5 text-emerald-600" />
-                  Receber Parcela da Promissória
+                <DialogTitle className="flex items-center gap-2 text-emerald-700">
+                  <HandCoins className="w-5 h-5" />
+                  Receber / Dar Baixa na Promissória
                 </DialogTitle>
               </DialogHeader>
+
               {selectedPromissoriaForPayment && (
-                <div className="space-y-4 py-2">
-                  <div className="bg-slate-50 p-3 rounded-lg border space-y-1">
-                    <p className="text-xs text-muted-foreground">Cliente:</p>
-                    <p className="font-bold text-slate-900 text-base">{selectedPromissoriaForPayment.customerName}</p>
-                    {selectedPromissoriaForPayment.customerPhone && (
-                      <p className="text-xs text-slate-600">Telefone: {selectedPromissoriaForPayment.customerPhone}</p>
-                    )}
+                <div className="space-y-4 pt-2">
+                  <div className="bg-slate-50 p-3 rounded-lg border text-sm space-y-1">
+                    <p><strong>Cliente:</strong> {selectedPromissoriaForPayment.customerName}</p>
+                    <p><strong>Valor Total da Dívida:</strong> {fmt(selectedPromissoriaForPayment.totalAmount)}</p>
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold">Qual parcela o cliente está pagando?</Label>
-                    <select
-                      className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                      value={selectedInstallmentNumber}
-                      onChange={(e) => setSelectedInstallmentNumber(Number(e.target.value))}
+                    <Label className="text-xs font-semibold">Selecione a Parcela a Receber:</Label>
+                    <Select
+                      value={String(selectedInstallmentNumber)}
+                      onValueChange={(v) => setSelectedInstallmentNumber(Number(v))}
                     >
-                      {selectedPromissoriaForPayment.installments
-                        .filter((i) => i.status === "pending")
-                        .map((inst) => (
-                          <option key={inst.installmentNumber} value={inst.installmentNumber}>
-                            Parcela {inst.installmentNumber} - Venc: {new Date(inst.dueDate + "T12:00:00").toLocaleDateString("pt-BR")} ({fmt(inst.amount)})
-                          </option>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectedPromissoriaForPayment.installments.map((inst) => (
+                          <SelectItem
+                            key={inst.installmentNumber}
+                            value={String(inst.installmentNumber)}
+                            disabled={inst.status === "paid"}
+                          >
+                            {inst.installmentNumber}ª Parcela - Venc: {fmtDate(inst.dueDate)} - Valor: {fmt(inst.amount)}{" "}
+                            {inst.status === "paid" ? "(Já Paga)" : "(Pendente)"}
+                          </SelectItem>
                         ))}
-                    </select>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold">Forma de Recebimento</Label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[
-                        { id: "dinheiro", label: "Dinheiro" },
-                        { id: "pix", label: "PIX" },
-                        { id: "cartao", label: "Cartão" },
-                      ].map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setInstallmentPayMethod(m.id)}
-                          className={`p-2 rounded-lg border text-xs font-bold transition-all ${
-                            installmentPayMethod === m.id
-                              ? "bg-emerald-600 text-white border-emerald-600"
-                              : "bg-white text-slate-700 hover:bg-slate-50"
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
+                    <Label className="text-xs font-semibold">Forma de Pagamento Recebida:</Label>
+                    <Select value={installmentPayMethod} onValueChange={setInstallmentPayMethod}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="dinheiro">Dinheiro (Entra na Gaveta)</SelectItem>
+                        <SelectItem value="pix">PIX</SelectItem>
+                        <SelectItem value="debito">Cartão de Débito</SelectItem>
+                        <SelectItem value="credito">Cartão de Crédito</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="flex justify-end gap-2 pt-2 border-t">
@@ -1219,7 +1205,257 @@ export default function Reports() {
         </div>
       )}
 
-      {/* 4. ABA: VISÃO GERAL & GRÁFICOS (VISÃO COMPLETA) */}
+      {/* 4. ABA: CONTROLE DE CAIXAS / TURNOS */}
+      {activeTab === "caixa" && (
+        <div className="space-y-6">
+          {/* Caixa Ativo Agora */}
+          <Card className={`border ${activeCaixaState ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40'}`}>
+            <CardHeader className="py-4 border-b">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <CardTitle className="text-base font-bold flex items-center gap-2 text-slate-900">
+                  <Vault className={`h-5 w-5 ${activeCaixaState ? 'text-emerald-600' : 'text-amber-600'}`} />
+                  Status do Caixa Atual
+                </CardTitle>
+                <Badge className={activeCaixaState ? 'bg-emerald-600 text-white' : 'bg-amber-600 text-white'}>
+                  {activeCaixaState ? '🟢 ABERTO (Em Operação)' : '🔴 FECHADO'}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 sm:p-6">
+              {activeCaixaState ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Operador Responsável</p>
+                    <p className="text-base font-bold text-slate-900">{activeCaixaState.openedBy}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">Aberto às: {fmtDateTime(activeCaixaState.openedAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Fundo Inicial (Troco)</p>
+                    <p className="text-base font-bold text-slate-900">{fmt(activeCaixaState.initialAmount)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Dinheiro Esperado na Gaveta</p>
+                    <p className="text-xl font-black text-emerald-700">{fmt(activeCaixaState.expectedCashInDrawer)}</p>
+                    <p className="text-[10px] text-muted-foreground">(Troco + Vendas Dinheiro - Sangrias)</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Vendido no Turno</p>
+                    <p className="text-xl font-black text-blue-950">{fmt(activeCaixaState.salesSummary.totalSales)}</p>
+                    <p className="text-[10px] text-muted-foreground">{activeCaixaState.salesSummary.totalTransactions} transações</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-4 text-slate-600 space-y-1">
+                  <p className="font-semibold">Nenhum caixa está aberto no momento.</p>
+                  <p className="text-xs text-muted-foreground">Abra o caixa na tela do PDV para iniciar as vendas e o controle de turno.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Histórico de Fechamentos Anteriores */}
+          <Card>
+            <CardHeader className="py-4 border-b">
+              <CardTitle className="text-base font-bold flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <History className="h-5 w-5 text-indigo-600" />
+                  Histórico de Turnos e Fechamentos Anteriores
+                </span>
+                <Badge variant="outline">{caixaHistoryList.length} turnos fechados</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {caixaHistoryList.length === 0 ? (
+                <div className="p-12 text-center text-muted-foreground space-y-2">
+                  <History className="h-10 w-10 mx-auto text-slate-300" />
+                  <p className="font-semibold text-slate-700">Nenhum histórico de fechamento de caixa registrado.</p>
+                  <p className="text-xs">Assim que você fechar um turno no PDV, o relatório detalhado ficará salvo aqui.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600 border-b">
+                      <tr>
+                        <th className="px-4 py-3">Data / Horário</th>
+                        <th className="px-4 py-3">Operador</th>
+                        <th className="px-4 py-3 text-right">Fundo Inicial</th>
+                        <th className="px-4 py-3 text-right">Total Vendas</th>
+                        <th className="px-4 py-3 text-right">Dinheiro Gaveta</th>
+                        <th className="px-4 py-3 text-right">Diferença</th>
+                        <th className="px-4 py-3 text-center">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {caixaHistoryList.map((cx) => (
+                        <tr key={cx.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="px-4 py-3 text-xs">
+                            <p className="font-semibold text-slate-900">{fmtDateTime(cx.openedAt)}</p>
+                            <p className="text-muted-foreground text-[11px]">Fechado: {cx.closedAt ? fmtDateTime(cx.closedAt) : "-"}</p>
+                          </td>
+                          <td className="px-4 py-3 text-xs font-medium text-slate-800">
+                            {cx.openedBy} {cx.closedBy && cx.closedBy !== cx.openedBy ? ` / ${cx.closedBy}` : ""}
+                          </td>
+                          <td className="px-4 py-3 text-right text-xs text-slate-600">
+                            {fmt(cx.initialAmount)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-blue-900 text-xs">
+                            {fmt(cx.salesSummary.totalSales)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-700 text-xs">
+                            {fmt(cx.actualCashInDrawer || 0)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-xs">
+                            {cx.difference !== undefined ? (
+                              cx.difference === 0 ? (
+                                <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-300">Batido (R$ 0)</Badge>
+                              ) : cx.difference > 0 ? (
+                                <Badge variant="outline" className="text-blue-700 bg-blue-50 border-blue-300">Sobra: +{fmt(cx.difference)}</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-rose-700 bg-rose-50 border-rose-300">Falta: {fmt(cx.difference)}</Badge>
+                              )
+                            ) : "-"}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setSelectedCaixaDetail(cx);
+                                setCaixaDetailModalOpen(true);
+                              }}
+                              className="text-xs h-7 gap-1"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              Ver Detalhes
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Modal Detalhe do Fechamento de Caixa */}
+          <Dialog open={caixaDetailModalOpen} onOpenChange={setCaixaDetailModalOpen}>
+            <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-indigo-900">
+                  <Vault className="w-5 h-5" />
+                  Comprovante de Fechamento de Caixa
+                </DialogTitle>
+              </DialogHeader>
+
+              {selectedCaixaDetail && (
+                <div className="space-y-4 pt-2 text-sm font-mono leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div className="text-center border-b border-dashed border-slate-300 pb-2 space-y-0.5">
+                    <p className="font-bold text-base uppercase text-slate-900">{storeName || "MINHA LOJA"}</p>
+                    <p className="text-xs text-slate-600">FECHAMENTO DE TURNO #{selectedCaixaDetail.id.slice(-6).toUpperCase()}</p>
+                    <p className="text-[11px] text-slate-500">Abertura: {fmtDateTime(selectedCaixaDetail.openedAt)}</p>
+                    <p className="text-[11px] text-slate-500">Fechamento: {selectedCaixaDetail.closedAt ? fmtDateTime(selectedCaixaDetail.closedAt) : "-"}</p>
+                    <p className="text-[11px] text-slate-700 font-bold">Operador: {selectedCaixaDetail.openedBy}</p>
+                  </div>
+
+                  {/* Resumo Financeiro da Gaveta */}
+                  <div className="space-y-1 border-b border-dashed border-slate-300 pb-2 text-xs">
+                    <p className="font-bold text-slate-900 text-sm">💵 CONCILIAÇÃO DA GAVETA (DINHEIRO FÍSICO):</p>
+                    <div className="flex justify-between">
+                      <span>(+) Fundo Inicial (Troco):</span>
+                      <span>{fmt(selectedCaixaDetail.initialAmount)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>(+) Vendas em Dinheiro:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.cash)}</span>
+                    </div>
+                    <div className="flex justify-between text-blue-700">
+                      <span>(+) Suprimentos / Entradas:</span>
+                      <span>{fmt(selectedCaixaDetail.movements.filter(m => m.type === "suprimento").reduce((s, m) => s + m.amount, 0))}</span>
+                    </div>
+                    <div className="flex justify-between text-rose-700">
+                      <span>(-) Sangrias / Retiradas:</span>
+                      <span>{fmt(selectedCaixaDetail.movements.filter(m => m.type === "sangria").reduce((s, m) => s + m.amount, 0))}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-slate-900 pt-1 border-t border-dotted">
+                      <span>(=) Dinheiro Esperado na Gaveta:</span>
+                      <span>{fmt(selectedCaixaDetail.expectedCashInDrawer)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-indigo-900">
+                      <span>(=) Dinheiro Contado pelo Operador:</span>
+                      <span>{fmt(selectedCaixaDetail.actualCashInDrawer || 0)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-xs pt-1 border-t">
+                      <span>Diferença (Sobra / Falta):</span>
+                      <span className={selectedCaixaDetail.difference === 0 ? "text-emerald-700" : selectedCaixaDetail.difference! > 0 ? "text-blue-700" : "text-rose-700"}>
+                        {selectedCaixaDetail.difference === 0 ? "R$ 0,00 (Batido)" : fmt(selectedCaixaDetail.difference || 0)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Resumo por Formas de Pagamento Totais */}
+                  <div className="space-y-1 border-b border-dashed border-slate-300 pb-2 text-xs">
+                    <p className="font-bold text-slate-900 text-sm">💳 TOTAL DE VENDAS POR FORMA DE PAGAMENTO:</p>
+                    <div className="flex justify-between">
+                      <span>Dinheiro:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.cash)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>PIX:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.pix)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Cartão Crédito:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.credit)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Cartão Débito:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.debit)}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-800">
+                      <span>Promissórias (A Prazo):</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.promissoria)}</span>
+                    </div>
+                    <div className="flex justify-between font-black text-sm text-slate-900 pt-1 border-t">
+                      <span>TOTAL GERAL VENDIDO:</span>
+                      <span>{fmt(selectedCaixaDetail.salesSummary.totalSales)}</span>
+                    </div>
+                  </div>
+
+                  {/* Lista de Movimentações (Sangrias e Suprimentos) */}
+                  {selectedCaixaDetail.movements.length > 0 && (
+                    <div className="space-y-1 text-xs">
+                      <p className="font-bold text-slate-900">📋 MOVIMENTAÇÕES DESTE TURNO:</p>
+                      {selectedCaixaDetail.movements.map((mov, idx) => (
+                        <div key={idx} className="flex justify-between text-[11px]">
+                          <span>[{mov.type === "sangria" ? "SANGRIA" : "SUPRIMENTO"}] {mov.reason}</span>
+                          <span className={mov.type === "sangria" ? "text-rose-600 font-bold" : "text-emerald-600 font-bold"}>
+                            {mov.type === "sangria" ? "-" : "+"}{fmt(mov.amount)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectedCaixaDetail.notes && (
+                    <div className="pt-2 text-xs text-slate-600 border-t">
+                      <strong>Observações:</strong> {selectedCaixaDetail.notes}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-2">
+                    <Button variant="outline" size="sm" onClick={() => setCaixaDetailModalOpen(false)}>
+                      Fechar
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        </div>
+      )}
+
+      {/* 5. ABA: VISÃO GERAL & GRÁFICOS (VISÃO COMPLETA) */}
       {activeTab === "geral" && (
         <div ref={reportRef} className="space-y-6 bg-white rounded-lg p-1">
           {/* Report title (visible in PDF) */}

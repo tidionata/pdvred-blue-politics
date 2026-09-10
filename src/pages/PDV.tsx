@@ -22,6 +22,7 @@ import {
   Banknote, QrCode, Receipt, Percent, DollarSign, X, Printer,
   CheckCircle2, Image as ImageIcon, UtensilsCrossed, Edit2, Pencil,
   History, Ban, RotateCcw, AlertTriangle, Sparkles, Award, Gift, FileText,
+  Vault, Lock, Unlock, ArrowDownRight, ArrowUpRight, Coins,
 } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
 import { printToKitchen, buildKitchenReceiptHtml } from "@/lib/electronPrinting";
@@ -30,6 +31,7 @@ import { CustomerSearchModal } from "@/components/Clientes/CustomerSearchModal";
 import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
 import { getLoyaltyPromoConfig, getCustomerPurchasesCount, addCustomerPurchaseStamp, setCustomerPurchasesCount } from "@/lib/loyalty";
 import { getPromissoriaConfig, createPromissoria, calculateInstallments, type PromissoriaInstallment } from "@/lib/promissoria";
+import { getActiveCaixa, openCaixa, addCaixaMovement, closeCaixa, recordSaleInCaixa, type CaixaSession } from "@/lib/caixa";
 
 type Product = Tables<"products">;
 
@@ -581,6 +583,21 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
   const [cancelReasonInput, setCancelReasonInput] = useState("");
   const [selectedSaleToCancel, setSelectedSaleToCancel] = useState<any | null>(null);
 
+  // ── Controle de Caixa (Abertura, Movimentação, Fechamento) ───────────────────
+  const [currentCaixa, setCurrentCaixa] = useState<CaixaSession | null>(null);
+  const [openCaixaModal, setOpenCaixaModal] = useState(false);
+  const [openCaixaOperator, setOpenCaixaOperator] = useState("");
+  const [openCaixaInitialAmount, setOpenCaixaInitialAmount] = useState<string>("0");
+  
+  const [movModalOpen, setMovModalOpen] = useState(false);
+  const [movType, setMovType] = useState<"suprimento" | "sangria">("suprimento");
+  const [movAmount, setMovAmount] = useState<string>("");
+  const [movReason, setMovReason] = useState<string>("");
+
+  const [closeCaixaModalOpen, setCloseCaixaModalOpen] = useState(false);
+  const [closeActualCash, setCloseActualCash] = useState<string>("");
+  const [closeNotes, setCloseNotes] = useState<string>("");
+
   useEffect(() => { searchRef.current?.focus(); }, []);
 
   useEffect(() => {
@@ -646,6 +663,23 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
       return data;
     },
   });
+
+  // Atualiza e carrega o caixa ativo
+  const refreshCaixa = useCallback(() => {
+    const active = getActiveCaixa(storeId || undefined);
+    setCurrentCaixa(active);
+  }, [storeId]);
+
+  useEffect(() => {
+    refreshCaixa();
+  }, [refreshCaixa]);
+
+  // Se não houver caixa aberto, pré-define o nome do operador para a abertura
+  useEffect(() => {
+    if (!currentCaixa && profile?.full_name) {
+      setOpenCaixaOperator(profile.full_name);
+    }
+  }, [currentCaixa, profile]);
 
   useEffect(() => {
     if (store && (!store.table_count || Number(store.table_count) <= 0) && deliveryType === "local" && !isDeliveryMode) {
@@ -911,6 +945,14 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
     mutationFn: async (opts?: { pendingOnly?: boolean }) => {
       const isPending = opts?.pendingOnly === true;
       if (cart.length === 0) throw new Error("Carrinho vazio");
+
+      // Validação de Caixa Aberto
+      const activeCx = getActiveCaixa(storeId || undefined);
+      if (!activeCx) {
+        setOpenCaixaModal(true);
+        throw new Error("O Caixa está FECHADO. É obrigatório abrir o caixa para realizar vendas.");
+      }
+
       if (sellers.length > 0 && !selectedSeller) {
         throw new Error("Por favor, selecione o vendedor responsável pela venda.");
       }
@@ -1087,6 +1129,10 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
           toast.success(`🎉 Cliente completou a meta de fidelidade! Ganhou: ${loyaltyCfg.rewardDescription}`);
         }
       }
+
+      // Registra a venda no caixa ativo (Dinheiro, Pix, Cartão ou Promissória)
+      recordSaleInCaixa(storeId || undefined, paymentMethod, total);
+      refreshCaixa();
 
       toast.success("Venda finalizada com sucesso!");
       setCart([]);
@@ -1303,6 +1349,104 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
           </Button>
         </div>
       )}
+      {/* ── BARRA DE CONTROLE DO CAIXA DO PDV ─────────────────────────── */}
+      <div className={`p-3 rounded-xl border flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs transition-colors ${
+        currentCaixa
+          ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
+          : "bg-amber-50/80 border-amber-200 text-amber-950"
+      }`}>
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className={`p-2.5 rounded-lg shrink-0 ${
+            currentCaixa ? "bg-emerald-600 text-white" : "bg-amber-600 text-white"
+          }`}>
+            <Vault className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm">
+                {currentCaixa ? `Caixa Aberto · Operador: ${currentCaixa.openedBy}` : "Caixa Fechado"}
+              </span>
+              <Badge className={`text-[10px] ${
+                currentCaixa ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"
+              }`}>
+                {currentCaixa ? "EM OPERAÇÃO" : "VENDAS BLOQUEADAS"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {currentCaixa
+                ? `Gaveta (Dinheiro): ${formatCurrency(currentCaixa.expectedCashInDrawer)} · Vendas Turno: ${formatCurrency(currentCaixa.salesSummary.totalSales)}`
+                : "Abra o caixa informando o fundo de troco para iniciar as vendas"}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap justify-end">
+          {currentCaixa ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setMovType("suprimento");
+                  setMovAmount("");
+                  setMovReason("");
+                  setMovModalOpen(true);
+                }}
+                className="bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-50 text-xs font-semibold gap-1 h-8 shadow-2xs"
+                title="Colocar dinheiro/troco na gaveta"
+              >
+                <ArrowDownRight className="h-3.5 w-3.5 text-emerald-600" />
+                + Suprimento
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setMovType("sangria");
+                  setMovAmount("");
+                  setMovReason("");
+                  setMovModalOpen(true);
+                }}
+                className="bg-white border-rose-300 text-rose-800 hover:bg-rose-50 text-xs font-semibold gap-1 h-8 shadow-2xs"
+                title="Retirar dinheiro da gaveta (sangria/despesas)"
+              >
+                <ArrowUpRight className="h-3.5 w-3.5 text-rose-600" />
+                - Sangria
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setCloseActualCash("");
+                  setCloseNotes("");
+                  setCloseCaixaModalOpen(true);
+                }}
+                className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold gap-1 h-8 shadow-sm"
+              >
+                <Lock className="h-3.5 w-3.5 text-amber-400" />
+                Fechar Caixa
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setOpenCaixaInitialAmount("0");
+                setOpenCaixaOperator(profile?.full_name || "Operador");
+                setOpenCaixaModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 h-9 px-4 shadow-md"
+            >
+              <Unlock className="h-4 w-4" />
+              Abrir Caixa Agora
+            </Button>
+          )}
+        </div>
+      </div>
+
       <div className={`flex flex-col lg:flex-row gap-4 ${selectedTable ? 'h-[calc(100vh-12rem)]' : 'h-[calc(100vh-8rem)]'}`}>
         {/* Left: Product search & grid */}
         <div className="flex-1 flex flex-col min-w-0 gap-4">
@@ -2190,6 +2334,312 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                     {cancelSaleMutation.isPending ? "Cancelando..." : "Confirmar Cancelamento"}
                   </Button>
                 </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      {/* ── MODAL: ABERTURA DE CAIXA ─────────────────────────────────── */}
+      <Dialog open={openCaixaModal} onOpenChange={setOpenCaixaModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-700">
+              <Unlock className="w-5 h-5" />
+              Abertura de Caixa / Turno
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-900 space-y-1">
+              <p className="font-bold">Início de Atendimento:</p>
+              <p>Abra o caixa do turno para permitir o registro de novas vendas no PDV.</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Operador Responsável:</Label>
+              <Input
+                value={openCaixaOperator}
+                onChange={(e) => setOpenCaixaOperator(e.target.value)}
+                placeholder="Nome do operador de caixa..."
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Fundo de Troco Inicial (Dinheiro na Gaveta):</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                <Input
+                  type="number"
+                  step="0.50"
+                  min={0}
+                  value={openCaixaInitialAmount}
+                  onChange={(e) => setOpenCaixaInitialAmount(e.target.value)}
+                  className="pl-9 font-bold text-base"
+                  placeholder="0,00"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Valor em notas e moedas colocado na gaveta para troco.</p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" size="sm" onClick={() => setOpenCaixaModal(false)}>
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!openCaixaOperator.trim()) {
+                    toast.error("Informe o nome do operador para abrir o caixa.");
+                    return;
+                  }
+                  const initial = parseFloat(openCaixaInitialAmount) || 0;
+                  openCaixa(storeId || undefined, openCaixaOperator.trim(), initial);
+                  refreshCaixa();
+                  setOpenCaixaModal(false);
+                  toast.success(`🟢 Caixa aberto com sucesso com troco inicial de ${formatCurrency(initial)}!`);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Confirmar Abertura
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── MODAL: SANGRIA & SUPRIMENTO ───────────────────────────────── */}
+      <Dialog open={movModalOpen} onOpenChange={setMovModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={`flex items-center gap-2 ${movType === 'suprimento' ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {movType === 'suprimento' ? (
+                <>
+                  <ArrowDownRight className="w-5 h-5" />
+                  Entrada de Dinheiro (Suprimento / Troco)
+                </>
+              ) : (
+                <>
+                  <ArrowUpRight className="w-5 h-5" />
+                  Retirada de Dinheiro (Sangria de Caixa)
+                </>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMovType("suprimento")}
+                className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                  movType === "suprimento"
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-slate-50 text-slate-700 border-slate-200"
+                }`}
+              >
+                + Suprimento (Entrada)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMovType("sangria")}
+                className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                  movType === "sangria"
+                    ? "bg-rose-600 text-white border-rose-600"
+                    : "bg-slate-50 text-slate-700 border-slate-200"
+                }`}
+              >
+                - Sangria (Retirada)
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Valor da Movimentação:</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                <Input
+                  type="number"
+                  step="0.50"
+                  min={0.01}
+                  value={movAmount}
+                  onChange={(e) => setMovAmount(e.target.value)}
+                  className="pl-9 font-bold text-base"
+                  placeholder="0,00"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Motivo / Descrição:</Label>
+              <Input
+                value={movReason}
+                onChange={(e) => setMovReason(e.target.value)}
+                placeholder={movType === "suprimento" ? "Ex: Troco adicional trazido pelo gerente" : "Ex: Recolhimento de segurança / Pagamento de água"}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" size="sm" onClick={() => setMovModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const val = parseFloat(movAmount) || 0;
+                  if (val <= 0) {
+                    toast.error("Informe um valor maior que zero.");
+                    return;
+                  }
+                  try {
+                    addCaixaMovement(
+                      storeId || undefined,
+                      movType,
+                      val,
+                      movReason.trim(),
+                      profile?.full_name || currentCaixa?.openedBy || "Operador"
+                    );
+                    refreshCaixa();
+                    setMovModalOpen(false);
+                    toast.success(
+                      movType === "suprimento"
+                        ? `Suprimento de ${formatCurrency(val)} adicionado ao caixa!`
+                        : `Sangria de ${formatCurrency(val)} registrada com sucesso!`
+                    );
+                  } catch (e: any) {
+                    toast.error("Erro na movimentação: " + e.message);
+                  }
+                }}
+                className={movType === 'suprimento' ? 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold' : 'bg-rose-600 hover:bg-rose-700 text-white font-bold'}
+              >
+                Confirmar {movType === 'suprimento' ? 'Suprimento' : 'Sangria'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── MODAL: FECHAMENTO DE CAIXA ─────────────────────────────────── */}
+      <Dialog open={closeCaixaModalOpen} onOpenChange={setCloseCaixaModalOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <Lock className="w-5 h-5 text-indigo-600" />
+              Fechamento de Caixa / Turno
+            </DialogTitle>
+          </DialogHeader>
+
+          {currentCaixa && (
+            <div className="space-y-4 pt-2">
+              <div className="bg-slate-50 border p-3 rounded-xl text-xs space-y-1">
+                <div className="flex justify-between font-semibold">
+                  <span>Operador: {currentCaixa.openedBy}</span>
+                  <span>Aberto às: {new Date(currentCaixa.openedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t">
+                  <span>Fundo Inicial: {formatCurrency(currentCaixa.initialAmount)}</span>
+                  <span>Vendas em Dinheiro: {formatCurrency(currentCaixa.salesSummary.cash)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Suprimentos (+): {formatCurrency(currentCaixa.movements.filter(m => m.type === "suprimento").reduce((s, m) => s + m.amount, 0))}</span>
+                  <span>Sangrias (-): {formatCurrency(currentCaixa.movements.filter(m => m.type === "sangria").reduce((s, m) => s + m.amount, 0))}</span>
+                </div>
+                <div className="flex justify-between font-bold text-emerald-800 text-sm pt-1 border-t">
+                  <span>Dinheiro Esperado na Gaveta:</span>
+                  <span>{formatCurrency(currentCaixa.expectedCashInDrawer)}</span>
+                </div>
+              </div>
+
+              {/* Resumo dos outros meios */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                <div className="bg-teal-50 border border-teal-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">PIX</p>
+                  <p className="font-bold text-teal-800">{formatCurrency(currentCaixa.salesSummary.pix)}</p>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Cartão Crédito</p>
+                  <p className="font-bold text-blue-800">{formatCurrency(currentCaixa.salesSummary.credit)}</p>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Cartão Débito</p>
+                  <p className="font-bold text-indigo-800">{formatCurrency(currentCaixa.salesSummary.debit)}</p>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Promissórias</p>
+                  <p className="font-bold text-amber-800">{formatCurrency(currentCaixa.salesSummary.promissoria)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t">
+                <Label className="text-xs font-bold text-slate-800">
+                  Informe o valor contado em DINHEIRO FÍSICO na gaveta:
+                </Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                  <Input
+                    type="number"
+                    step="0.50"
+                    min={0}
+                    value={closeActualCash}
+                    onChange={(e) => setCloseActualCash(e.target.value)}
+                    className="pl-9 font-bold text-lg"
+                    placeholder="0,00"
+                    autoFocus
+                  />
+                </div>
+                {closeActualCash !== "" && (
+                  <div className="text-xs font-bold pt-1">
+                    {(() => {
+                      const actual = parseFloat(closeActualCash) || 0;
+                      const diff = actual - currentCaixa.expectedCashInDrawer;
+                      if (diff === 0) return <span className="text-emerald-600">✓ Caixa Batido (Diferença: R$ 0,00)</span>;
+                      if (diff > 0) return <span className="text-blue-600">⚠ Sobra de Caixa: +{formatCurrency(diff)}</span>;
+                      return <span className="text-rose-600">⚠ Falta de Caixa: {formatCurrency(diff)}</span>;
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Observações do Fechamento (opcional):</Label>
+                <Input
+                  value={closeNotes}
+                  onChange={(e) => setCloseNotes(e.target.value)}
+                  placeholder="Ex: Turno da manhã, sangria realizada para pagamento de fornecedor..."
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <Button variant="outline" size="sm" onClick={() => setCloseCaixaModalOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const actual = parseFloat(closeActualCash);
+                    if (isNaN(actual) || actual < 0) {
+                      toast.error("Por favor, informe a contagem do dinheiro na gaveta.");
+                      return;
+                    }
+                    try {
+                      closeCaixa(
+                        storeId || undefined,
+                        profile?.full_name || currentCaixa.openedBy,
+                        actual,
+                        closeNotes.trim()
+                      );
+                      refreshCaixa();
+                      setCloseCaixaModalOpen(false);
+                      toast.success("🔒 Caixa fechado com sucesso! Relatório salvo em Relatórios > Controle de Caixas.");
+                    } catch (e: any) {
+                      toast.error("Erro ao fechar caixa: " + e.message);
+                    }
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold gap-1"
+                >
+                  <Lock className="w-4 h-4" />
+                  Confirmar e Fechar Caixa
+                </Button>
               </div>
             </div>
           )}
