@@ -1413,43 +1413,97 @@ export default function SettingsPage() {
               </p>
               
               {printers.length > 0 ? (
-                <div className="grid gap-6 sm:grid-cols-2 mt-4">
-                  <div className="space-y-1.5">
-                    <Label className="font-semibold text-blue-600">Impressora do Caixa (Notas/Recibos)</Label>
-                    <select 
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      value={selectedCaixaPrinter}
-                      onChange={e => {
-                        setSelectedCaixaPrinter(e.target.value);
-                        localStorage.setItem('pdv_printer_caixa', e.target.value);
-                        toast.success("Impressora do caixa salva!");
-                      }}
-                    >
-                      <option value="">-- Usar impressora padrão do sistema --</option>
-                      {printers.map(p => (
-                        <option key={p.name} value={p.name}>{p.name} {p.isDefault ? '(Padrão)' : ''}</option>
-                      ))}
-                    </select>
+                <>
+                  <div className="grid gap-6 sm:grid-cols-2 mt-4">
+                    <div className="space-y-1.5">
+                      <Label className="font-semibold text-blue-600">Impressora do Caixa (Notas/Recibos)</Label>
+                      <select 
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={selectedCaixaPrinter}
+                        onChange={e => {
+                          setSelectedCaixaPrinter(e.target.value);
+                          localStorage.setItem('pdv_printer_caixa', e.target.value);
+                          toast.success("Impressora do caixa salva!");
+                        }}
+                      >
+                        <option value="">-- Usar impressora padrão do sistema --</option>
+                        {printers.map(p => (
+                          <option key={p.name} value={p.name}>{p.name} {p.isDefault ? '(Padrão)' : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="font-semibold text-orange-600">Impressora da Cozinha (Pedidos)</Label>
+                      <select 
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={selectedCozinhaPrinter}
+                        onChange={e => {
+                          setSelectedCozinhaPrinter(e.target.value);
+                          localStorage.setItem('pdv_printer_cozinha', e.target.value);
+                          toast.success("Impressora da cozinha salva!");
+                        }}
+                      >
+                        <option value="">-- Não imprimir na cozinha --</option>
+                        {printers.map(p => (
+                          <option key={p.name} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label className="font-semibold text-orange-600">Impressora da Cozinha (Pedidos)</Label>
-                    <select 
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      value={selectedCozinhaPrinter}
-                      onChange={e => {
-                        setSelectedCozinhaPrinter(e.target.value);
-                        localStorage.setItem('pdv_printer_cozinha', e.target.value);
-                        toast.success("Impressora da cozinha salva!");
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2"
+                      onClick={async () => {
+                        // @ts-ignore
+                        if (window.electronAPI) {
+                          try {
+                            const testHtml = `
+                              <html>
+                                <head>
+                                  <style>
+                                    body { font-family: 'Courier New', monospace; font-size: 12px; margin: 0; padding: 10px; width: 72mm; color: #000; }
+                                    .center { text-align: center; }
+                                    .bold { font-weight: bold; }
+                                    .sep { border-top: 2px dashed #000; margin: 8px 0; }
+                                  </style>
+                                </head>
+                                <body>
+                                  <div class="center bold" style="font-size: 16px;">PDV TOTAL</div>
+                                  <div class="center" style="font-size: 12px;">TESTE DE IMPRESSÃO</div>
+                                  <div class="sep"></div>
+                                  <div>Impressora: ${selectedCaixaPrinter || 'Padrão do Windows'}</div>
+                                  <div>Status: Comunicando Corretamente</div>
+                                  <div>Data: ${new Date().toLocaleString('pt-BR')}</div>
+                                  <div class="sep"></div>
+                                  <div class="center bold">TESTE CONCLUÍDO COM SUCESSO!</div>
+                                  <br/><br/>
+                                </body>
+                              </html>
+                            `;
+                            // @ts-ignore
+                            await window.electronAPI.printHtml({
+                              html: testHtml,
+                              printer: selectedCaixaPrinter || undefined,
+                              silent: true
+                            });
+                            toast.success("Comando de teste enviado para a impressora!");
+                          } catch (err: any) {
+                            toast.error("Erro ao enviar teste: " + err.message);
+                          }
+                        } else {
+                          toast.info("O teste direto está disponível apenas no aplicativo desktop instalado.");
+                        }
                       }}
                     >
-                      <option value="">-- Não imprimir na cozinha --</option>
-                      {printers.map(p => (
-                        <option key={p.name} value={p.name}>{p.name}</option>
-                      ))}
-                    </select>
+                      <Printer className="h-4 w-4" />
+                      Testar Impressão no Caixa
+                    </Button>
                   </div>
-                </div>
+                </>
               ) : (
                 <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-4 text-sm text-yellow-800">
                   <p className="font-semibold flex items-center gap-1.5">

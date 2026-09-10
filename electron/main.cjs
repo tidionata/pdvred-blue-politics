@@ -116,6 +116,8 @@ function createWindow() {
   ipcMain.handle('print-html', async (event, { html, printer, silent }) => {
     const hiddenWin = new BrowserWindow({
       show: false,
+      width: 400,
+      height: 800,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
 
@@ -123,18 +125,23 @@ function createWindow() {
 
     return new Promise((resolve, reject) => {
       hiddenWin.webContents.on('did-finish-load', () => {
-        hiddenWin.webContents.print(
-          {
-            silent: silent === undefined ? true : silent,
-            deviceName: printer || undefined,
-            margins: { marginType: 'none' },
-          },
-          (success, failureReason) => {
-            hiddenWin.close();
-            if (success) resolve(true);
-            else reject(new Error(failureReason || 'Falha na impressão'));
-          }
-        );
+        // Aguarda 150ms para garantir que SVGs e estilos do cupom foram renderizados
+        setTimeout(() => {
+          hiddenWin.webContents.print(
+            {
+              silent: silent === undefined ? true : silent,
+              deviceName: printer || undefined,
+              printBackground: true,
+              color: false, // Monocromático para impressoras térmicas (Bematech / Daruma / Elgin)
+              margins: { marginType: 'none' },
+            },
+            (success, failureReason) => {
+              hiddenWin.close();
+              if (success) resolve(true);
+              else reject(new Error(failureReason || 'Falha na impressão'));
+            }
+          );
+        }, 150);
       });
     });
   });
