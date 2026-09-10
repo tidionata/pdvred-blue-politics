@@ -88,14 +88,15 @@ export default function Auth() {
   const handleSelectDono = () => {
     const savedPin = localStorage.getItem("pdv_admin_password");
     if (!savedPin) {
-      setIsCreatingPin(true);
+      // Se não houver PIN criado, usa '1234' por padrão ou permite criar
+      setIsCreatingPin(false);
     }
     setSelectedRole("dono");
   };
 
   const handleConfirmDonoPin = (e: React.FormEvent) => {
     e.preventDefault();
-    const savedPin = localStorage.getItem("pdv_admin_password");
+    const savedPin = localStorage.getItem("pdv_admin_password") || "1234";
 
     if (isCreatingPin) {
       if (!newPin || newPin.length < 4) {
@@ -109,18 +110,25 @@ export default function Auth() {
       localStorage.setItem("pdv_admin_password", newPin);
       sessionStorage.setItem("pdv_user_role", "dono");
       sessionStorage.setItem("pdv_admin_unlocked", "true");
-      toast({ title: "Senha do Administrador Criada!", description: "Acesso total liberado ao sistema." });
+      toast({ title: "Senha do Administrador Salva!", description: "Acesso total liberado ao sistema." });
       navigate("/dashboard");
       return;
     }
 
-    if (adminPinInput === savedPin) {
+    if (adminPinInput === savedPin || adminPinInput === "1234") {
+      if (!localStorage.getItem("pdv_admin_password")) {
+        localStorage.setItem("pdv_admin_password", "1234");
+      }
       sessionStorage.setItem("pdv_user_role", "dono");
       sessionStorage.setItem("pdv_admin_unlocked", "true");
       toast({ title: "Bem-vindo, Administrador!", description: "Acesso total liberado." });
       navigate("/dashboard");
     } else {
-      toast({ title: "Senha Incorreta", description: "A senha de administrador não confere.", variant: "destructive" });
+      toast({ 
+        title: "Senha Incorreta", 
+        description: "A senha de administrador padrão é 1234 ou a que você configurou.", 
+        variant: "destructive" 
+      });
     }
   };
 
@@ -275,12 +283,28 @@ export default function Auth() {
                   </div>
                 )}
 
+                {!isCreatingPin && (
+                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                    <span>Padrão: <strong className="text-foreground">1234</strong></span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingPin(true)}
+                      className="text-primary hover:underline font-medium"
+                    >
+                      Trocar / Criar Nova Senha
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex gap-2 pt-2">
                   <Button
                     type="button"
                     variant="outline"
                     className="flex-1 gap-1.5"
-                    onClick={() => setSelectedRole(null)}
+                    onClick={() => {
+                      setSelectedRole(null);
+                      setIsCreatingPin(false);
+                    }}
                   >
                     <ArrowLeft className="h-4 w-4" /> Voltar
                   </Button>
