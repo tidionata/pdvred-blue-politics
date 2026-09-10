@@ -59,6 +59,7 @@ interface SaleTicket {
   storeCity: string;
   customerName?: string;
   customerPhone?: string;
+  customerDocument?: string;
   deliveryAddress?: string;
   deliveryNotes?: string;
   createdAt: Date;
@@ -230,26 +231,45 @@ function Cupom({ ticket, printRef }: { ticket: SaleTicket; printRef: React.RefOb
         {ticket.deliveryNotes && <p>OBS: {ticket.deliveryNotes}</p>}
       </div>
 
-      {/* Termo de Nota Promissória se a forma de pagamento for Promissória */}
+      {/* Termo de Nota Promissória / Consignado / Crediário */}
       {ticket.paymentMethod === "promissoria" && ticket.promissoriaInstallments && (
         <>
-          <div className="border-t border-dashed border-black my-1" />
-          <div className="text-[9px] space-y-1 text-center font-mono">
-            <p className="font-bold text-[10px] uppercase">*** NOTA PROMISSÓRIA / CREDIÁRIO ***</p>
-            <p className="text-[8.5px]">Reconheço e pagarei a quantia total de R$ {ticket.total.toFixed(2).replace(".", ",")}</p>
-            <div className="text-left space-y-0.5 py-1">
+          <div className="border-t-2 border-dashed border-black my-2" />
+          <div className="text-[9px] space-y-1.5 text-center font-mono bg-slate-50/50 p-1 rounded">
+            <div className="border border-black p-1">
+              <p className="font-bold text-[11px] uppercase tracking-wider">*** NOTA PROMISSÓRIA / CREDIÁRIO ***</p>
+              <p className="text-[8.5px] uppercase font-semibold">VIA DA LOJA (COMPROVANTE DE DÍVIDA)</p>
+            </div>
+            
+            <p className="text-[8.5px] text-justify pt-1 leading-tight">
+              Reconheço(emos) a exatidão desta dívida no valor total de <strong>R$ {ticket.total.toFixed(2).replace(".", ",")}</strong> e me comprometo a efetuar o pagamento nas seguintes datas e parcelas:
+            </p>
+
+            <div className="text-left space-y-1 py-1 border-t border-b border-black">
               {ticket.promissoriaInstallments.map((inst) => (
-                <div key={inst.installmentNumber} className="flex justify-between border-b border-dotted border-gray-400 py-0.5">
-                  <span>Parcela {inst.installmentNumber}/{ticket.promissoriaInstallments!.length} - Venc: {new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
-                  <span className="font-bold">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
+                <div key={inst.installmentNumber} className="flex justify-between items-center text-[9.5px]">
+                  <span className="font-medium">
+                    PARCELA {inst.installmentNumber}/{ticket.promissoriaInstallments!.length} - VENC: <strong>{new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}</strong>
+                  </span>
+                  <span className="font-bold text-[10px]">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
                 </div>
               ))}
             </div>
-            <div className="pt-4 pb-1">
-              <div className="border-b border-black w-4/5 mx-auto" />
-              <p className="text-[8px] mt-0.5 uppercase">Assinatura do Devedor: {ticket.customerName || "Cliente"}</p>
+
+            <div className="text-left text-[8.5px] space-y-0.5 pt-0.5">
+              <p><strong>DEVEDOR:</strong> {ticket.customerName || "Cliente não identificado"}</p>
+              {ticket.customerDocument && <p><strong>CPF/RG:</strong> {ticket.customerDocument}</p>}
+              {ticket.customerPhone && <p><strong>TELEFONE:</strong> {ticket.customerPhone}</p>}
+            </div>
+
+            <div className="pt-6 pb-2">
+              <div className="border-b border-black w-11/12 mx-auto" />
+              <p className="text-[8.5px] mt-1 font-bold uppercase">
+                ASSINATURA DO DEVEDOR: {ticket.customerName || "CLIENTE"}
+              </p>
             </div>
           </div>
+          <div className="border-t-2 border-dashed border-black my-2" />
         </>
       )}
 
@@ -1186,6 +1206,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
         storeCity: (store as any)?.city ?? "",
         customerName,
         customerPhone,
+        customerDocument,
         deliveryAddress,
         deliveryNotes,
         createdAt: new Date(),
