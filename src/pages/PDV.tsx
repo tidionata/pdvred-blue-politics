@@ -593,10 +593,12 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
   const [movType, setMovType] = useState<"suprimento" | "sangria">("suprimento");
   const [movAmount, setMovAmount] = useState<string>("");
   const [movReason, setMovReason] = useState<string>("");
+  const [movPassword, setMovPassword] = useState<string>("");
 
   const [closeCaixaModalOpen, setCloseCaixaModalOpen] = useState(false);
   const [closeActualCash, setCloseActualCash] = useState<string>("");
   const [closeNotes, setCloseNotes] = useState<string>("");
+  const [closePassword, setClosePassword] = useState<string>("");
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
@@ -2479,8 +2481,28 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
               />
             </div>
 
+            {/* Senha do Dono / Administrador */}
+            <div className="space-y-1.5 p-2.5 rounded-lg bg-amber-50/70 border border-amber-200">
+              <Label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
+                Senha Master do Dono / Gerente:
+              </Label>
+              <Input
+                type="password"
+                placeholder="Digite a senha master..."
+                value={movPassword}
+                onChange={(e) => setMovPassword(e.target.value)}
+                className="bg-white"
+              />
+              <p className="text-[10px] text-amber-700">
+                {localStorage.getItem("pdv_admin_password")
+                  ? "Esta ação exige autorização com a Senha Master configurada."
+                  : "Dica: Caso não tenha definido uma senha em Configurações > Segurança, digite a senha padrão (1234)."}
+              </p>
+            </div>
+
             <div className="flex justify-end gap-2 pt-2 border-t">
-              <Button variant="outline" size="sm" onClick={() => setMovModalOpen(false)}>
+              <Button variant="outline" size="sm" onClick={() => { setMovModalOpen(false); setMovPassword(""); }}>
                 Cancelar
               </Button>
               <Button
@@ -2491,6 +2513,13 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                     toast.error("Informe um valor maior que zero.");
                     return;
                   }
+
+                  const savedPass = localStorage.getItem("pdv_admin_password") || "1234";
+                  if (movPassword !== savedPass) {
+                    toast.error("🔒 Senha do Dono/Gerente incorreta! Movimentação não autorizada.");
+                    return;
+                  }
+
                   try {
                     addCaixaMovement(
                       storeId || undefined,
@@ -2501,6 +2530,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                     );
                     refreshCaixa();
                     setMovModalOpen(false);
+                    setMovPassword("");
                     toast.success(
                       movType === "suprimento"
                         ? `Suprimento de ${formatCurrency(val)} adicionado ao caixa!`
@@ -2609,8 +2639,28 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                 />
               </div>
 
+              {/* Senha do Dono / Administrador */}
+              <div className="space-y-1.5 p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200">
+                <Label className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-indigo-600" />
+                  Senha Master do Dono / Gerente:
+                </Label>
+                <Input
+                  type="password"
+                  placeholder="Digite a senha master..."
+                  value={closePassword}
+                  onChange={(e) => setClosePassword(e.target.value)}
+                  className="bg-white"
+                />
+                <p className="text-[10px] text-indigo-700">
+                  {localStorage.getItem("pdv_admin_password")
+                    ? "Esta ação exige autorização com a Senha Master configurada."
+                    : "Dica: Caso não tenha definido uma senha em Configurações > Segurança, digite a senha padrão (1234)."}
+                </p>
+              </div>
+
               <div className="flex justify-end gap-2 pt-2 border-t">
-                <Button variant="outline" size="sm" onClick={() => setCloseCaixaModalOpen(false)}>
+                <Button variant="outline" size="sm" onClick={() => { setCloseCaixaModalOpen(false); setClosePassword(""); }}>
                   Cancelar
                 </Button>
                 <Button
@@ -2621,6 +2671,13 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       toast.error("Por favor, informe a contagem do dinheiro na gaveta.");
                       return;
                     }
+
+                    const savedPass = localStorage.getItem("pdv_admin_password") || "1234";
+                    if (closePassword !== savedPass) {
+                      toast.error("🔒 Senha do Dono/Gerente incorreta! Fechamento não autorizado.");
+                      return;
+                    }
+
                     try {
                       closeCaixa(
                         storeId || undefined,
@@ -2630,6 +2687,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       );
                       refreshCaixa();
                       setCloseCaixaModalOpen(false);
+                      setClosePassword("");
                       toast.success("🔒 Caixa fechado com sucesso! Relatório salvo em Relatórios > Controle de Caixas.");
                     } catch (e: any) {
                       toast.error("Erro ao fechar caixa: " + e.message);
