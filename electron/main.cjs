@@ -116,7 +116,7 @@ function createWindow() {
   ipcMain.handle('print-html', async (event, { html, printer, silent }) => {
     const hiddenWin = new BrowserWindow({
       show: false,
-      width: 400,
+      width: 300,
       height: 800,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
@@ -125,7 +125,7 @@ function createWindow() {
 
     return new Promise((resolve, reject) => {
       hiddenWin.webContents.on('did-finish-load', () => {
-        // Aguarda 150ms para garantir que SVGs e estilos do cupom foram renderizados
+        // Aguarda 200ms para garantir que SVGs e estilos do cupom foram renderizados
         setTimeout(() => {
           hiddenWin.webContents.print(
             {
@@ -141,7 +141,7 @@ function createWindow() {
               else reject(new Error(failureReason || 'Falha na impressão'));
             }
           );
-        }, 150);
+        }, 200);
       });
     });
   });

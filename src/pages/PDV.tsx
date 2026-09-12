@@ -99,7 +99,7 @@ function Cupom({ ticket, printRef }: { ticket: SaleTicket; printRef: React.RefOb
   return (
     <div
       ref={printRef}
-      className="bg-white text-black font-mono text-[11px] leading-tight p-2 sm:p-4 w-full max-w-[300px] mx-auto select-text"
+      className="bg-white text-black font-mono text-[11px] leading-tight p-2 sm:p-4 w-full max-w-[280px] mx-auto select-text"
       style={{ fontFamily: "'Courier New', Courier, monospace" }}
     >
       {/* 1. Acompanhe seu pedido (Topo) */}
@@ -385,7 +385,8 @@ function CupomModal({
             html, body { 
               margin: 0 !important; 
               padding: 0 !important; 
-              width: 100% !important; 
+              width: 72mm !important; 
+              max-width: 72mm !important;
               font-family: 'Courier New', Courier, monospace !important; 
               font-size: 11px !important; 
               line-height: 1.25 !important; 
@@ -435,6 +436,8 @@ function CupomModal({
             .w-24 { width: 75px; }
             .w-28 { width: 90px; }
             .w-full { width: 100% !important; max-width: 100% !important; }
+            .max-w-\\[280px\\] { max-width: 100% !important; }
+            .max-w-\\[300px\\] { max-width: 100% !important; }
             .w-\\[20\\%\\] { width: 18%; }
             .w-\\[30\\%\\] { width: 32%; }
             .w-\\[40\\%\\] { width: 40%; }
@@ -481,7 +484,7 @@ function CupomModal({
           </style>
         </head>
         <body>
-          <div style="width: 100%; box-sizing: border-box; margin: 0; padding: 2px 0;">
+          <div style="width: 72mm; max-width: 72mm; box-sizing: border-box; margin: 0; padding: 2px 0;">
             ${content.innerHTML}
           </div>
         </body>
