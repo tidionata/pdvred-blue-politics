@@ -921,9 +921,12 @@ export default function SettingsPage() {
                 </Label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                   {[
-                    { id: "30", title: "30 Dias", desc: "1 parcela para vencer em 30 dias" },
-                    { id: "30_60", title: "30 / 60 Dias", desc: "2 parcelas (30 e 60 dias)" },
-                    { id: "30_60_90", title: "30 / 60 / 90 Dias", desc: "3 parcelas (30, 60 e 90 dias)" },
+                    { id: "30", title: "30 Dias (1x)", desc: "1 parcela para vencer em 30 dias" },
+                    { id: "30_60", title: "30 / 60 Dias (2x)", desc: "2 parcelas (30 e 60 dias)" },
+                    { id: "30_60_90", title: "30 / 60 / 90 Dias (3x)", desc: "3 parcelas (30, 60 e 90 dias)" },
+                    { id: "30_60_90_120", title: "Até 4x (120 Dias)", desc: "4 parcelas (30, 60, 90 e 120 dias)" },
+                    { id: "30_60_90_120_150", title: "Até 5x (150 Dias)", desc: "5 parcelas (30 a 150 dias)" },
+                    { id: "30_60_90_120_150_180", title: "Até 6x (180 Dias)", desc: "6 parcelas (30 a 180 dias)" },
                     { id: "pulo_mes", title: "No Pulo (Mês Seguinte)", desc: "Começa a pagar no dia 10 do próximo mês" },
                   ].map((plan) => {
                     const isChecked = promissoriaConfig.allowedPlans?.includes(plan.id as any);

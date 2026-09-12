@@ -30,7 +30,7 @@ import { db } from "@/lib/db";
 import { CustomerSearchModal } from "@/components/Clientes/CustomerSearchModal";
 import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
 import { getLoyaltyPromoConfig, getCustomerPurchasesCount, addCustomerPurchaseStamp, setCustomerPurchasesCount } from "@/lib/loyalty";
-import { getPromissoriaConfig, createPromissoria, calculateInstallments, type PromissoriaInstallment } from "@/lib/promissoria";
+import { getPromissoriaConfig, createPromissoria, calculateInstallments, type PromissoriaInstallment, type PromissoriaPlanType } from "@/lib/promissoria";
 import { getActiveCaixa, openCaixa, addCaixaMovement, closeCaixa, recordSaleInCaixa, type CaixaSession } from "@/lib/caixa";
 
 type Product = Tables<"products">;
@@ -586,7 +586,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
   const [customerDocument, setCustomerDocument] = useState("");
   const [customerSearchModalOpen, setCustomerSearchModalOpen] = useState(false);
   const [customerFormModalOpen, setCustomerFormModalOpen] = useState(false);
-  const [promissoriaPlan, setPromissoriaPlan] = useState<"30" | "30_60" | "30_60_90" | "pulo_mes">("30");
+  const [promissoriaPlan, setPromissoriaPlan] = useState<PromissoriaPlanType>("30");
   const [deliveryType, setDeliveryType] = useState<"local" | "retirada" | "entrega">(isDeliveryMode ? "entrega" : "local");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [deliveryNotes, setDeliveryNotes] = useState("");
@@ -1712,11 +1712,14 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-1.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                       {[
                         { id: "30", label: "30 Dias (1x)" },
                         { id: "30_60", label: "30 / 60 Dias (2x)" },
-                        { id: "30_60_90", label: "30 / 60 / 90d (3x)" },
+                        { id: "30_60_90", label: "Até 3x (90d)" },
+                        { id: "30_60_90_120", label: "Até 4x (120d)" },
+                        { id: "30_60_90_120_150", label: "Até 5x (150d)" },
+                        { id: "30_60_90_120_150_180", label: "Até 6x (180d)" },
                         { id: "pulo_mes", label: "No Pulo (Mês que vem)" },
                       ]
                         .filter(p => promissoriaCfg.allowedPlans?.includes(p.id as any))
@@ -1727,7 +1730,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                             onClick={() => setPromissoriaPlan(plan.id as any)}
                             className={`p-1.5 rounded border text-left text-[11px] font-medium transition-all ${
                               promissoriaPlan === plan.id
-                                ? "border-indigo-600 bg-indigo-600 text-white font-bold"
+                                ? "border-indigo-600 bg-indigo-600 text-white font-bold shadow-xs"
                                 : "border-indigo-200 bg-white text-indigo-900 hover:bg-indigo-50"
                             }`}
                           >

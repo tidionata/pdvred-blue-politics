@@ -7,6 +7,15 @@ export interface PromissoriaInstallment {
   paymentMethod?: string;
 }
 
+export type PromissoriaPlanType = 
+  | "30" 
+  | "30_60" 
+  | "30_60_90" 
+  | "30_60_90_120" 
+  | "30_60_90_120_150" 
+  | "30_60_90_120_150_180" 
+  | "pulo_mes";
+
 export interface Promissoria {
   id: string;
   storeId?: string;
@@ -16,7 +25,7 @@ export interface Promissoria {
   customerPhone?: string;
   customerDocument?: string; // CPF / RG
   totalAmount: number;
-  plan: "30" | "30_60" | "30_60_90" | "pulo_mes";
+  plan: PromissoriaPlanType;
   installmentsCount: number;
   installments: PromissoriaInstallment[];
   status: "pending" | "partially_paid" | "paid" | "cancelled";
@@ -26,7 +35,7 @@ export interface Promissoria {
 
 export interface PromissoriaConfig {
   enabled: boolean;
-  allowedPlans: Array<"30" | "30_60" | "30_60_90" | "pulo_mes">;
+  allowedPlans: Array<PromissoriaPlanType>;
   defaultPlan?: string;
   requireDocument?: boolean;
 }
@@ -36,7 +45,15 @@ const STORAGE_DATA_KEY = "pdv_promissorias_list";
 
 export const DEFAULT_PROMISSORIA_CONFIG: PromissoriaConfig = {
   enabled: false,
-  allowedPlans: ["30", "30_60", "30_60_90", "pulo_mes"],
+  allowedPlans: [
+    "30", 
+    "30_60", 
+    "30_60_90", 
+    "30_60_90_120", 
+    "30_60_90_120_150", 
+    "30_60_90_120_150_180", 
+    "pulo_mes"
+  ],
   defaultPlan: "30",
   requireDocument: false,
 };
@@ -60,52 +77,40 @@ export function savePromissoriaConfig(config: PromissoriaConfig, storeId?: strin
 
 export function calculateInstallments(
   total: number,
-  plan: "30" | "30_60" | "30_60_90" | "pulo_mes",
+  plan: PromissoriaPlanType,
   baseDate: Date = new Date()
 ): PromissoriaInstallment[] {
   const installments: PromissoriaInstallment[] = [];
 
+  const splitInstallments = (count: number) => {
+    const part = Number((total / count).toFixed(2));
+    let accumulated = 0;
+    for (let i = 1; i <= count; i++) {
+      const due = new Date(baseDate);
+      due.setDate(due.getDate() + (i * 30));
+      const amount = i === count ? Number((total - accumulated).toFixed(2)) : part;
+      accumulated += amount;
+      installments.push({
+        installmentNumber: i,
+        dueDate: due.toISOString().slice(0, 10),
+        amount: amount,
+        status: "pending",
+      });
+    }
+  };
+
   if (plan === "30") {
-    const due = new Date(baseDate);
-    due.setDate(due.getDate() + 30);
-    installments.push({
-      installmentNumber: 1,
-      dueDate: due.toISOString().slice(0, 10),
-      amount: total,
-      status: "pending",
-    });
+    splitInstallments(1);
   } else if (plan === "30_60") {
-    const part = Number((total / 2).toFixed(2));
-    const remainder = Number((total - part).toFixed(2));
-
-    const due1 = new Date(baseDate);
-    due1.setDate(due1.getDate() + 30);
-
-    const due2 = new Date(baseDate);
-    due2.setDate(due2.getDate() + 60);
-
-    installments.push(
-      { installmentNumber: 1, dueDate: due1.toISOString().slice(0, 10), amount: part, status: "pending" },
-      { installmentNumber: 2, dueDate: due2.toISOString().slice(0, 10), amount: remainder, status: "pending" }
-    );
+    splitInstallments(2);
   } else if (plan === "30_60_90") {
-    const part = Number((total / 3).toFixed(2));
-    const remainder = Number((total - part * 2).toFixed(2));
-
-    const due1 = new Date(baseDate);
-    due1.setDate(due1.getDate() + 30);
-
-    const due2 = new Date(baseDate);
-    due2.setDate(due2.getDate() + 60);
-
-    const due3 = new Date(baseDate);
-    due3.setDate(due3.getDate() + 90);
-
-    installments.push(
-      { installmentNumber: 1, dueDate: due1.toISOString().slice(0, 10), amount: part, status: "pending" },
-      { installmentNumber: 2, dueDate: due2.toISOString().slice(0, 10), amount: part, status: "pending" },
-      { installmentNumber: 3, dueDate: due3.toISOString().slice(0, 10), amount: remainder, status: "pending" }
-    );
+    splitInstallments(3);
+  } else if (plan === "30_60_90_120") {
+    splitInstallments(4);
+  } else if (plan === "30_60_90_120_150") {
+    splitInstallments(5);
+  } else if (plan === "30_60_90_120_150_180") {
+    splitInstallments(6);
   } else if (plan === "pulo_mes") {
     const due = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 10);
     if (due.getTime() <= baseDate.getTime()) {
