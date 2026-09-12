@@ -376,19 +376,18 @@ function CupomModal({
           <style>
             @page { 
               size: 80mm auto; 
-              margin: 0mm; 
+              margin: 0mm !important; 
             }
             *, *::before, *::after {
               box-sizing: border-box !important;
               color: #000000 !important;
             }
             html, body { 
-              margin: 0 auto !important; 
+              margin: 0 !important; 
               padding: 0 !important; 
               width: 100% !important; 
-              max-width: 72mm !important;
               font-family: 'Courier New', Courier, monospace !important; 
-              font-size: 10px !important; 
+              font-size: 11px !important; 
               line-height: 1.25 !important; 
               color: #000000 !important; 
               background: #ffffff !important;
@@ -482,7 +481,7 @@ function CupomModal({
           </style>
         </head>
         <body>
-          <div style="width: 100%; max-width: 72mm; margin: 0 auto; padding: 2px 4px;">
+          <div style="width: 100%; box-sizing: border-box; margin: 0; padding: 2px 0;">
             ${content.innerHTML}
           </div>
         </body>
