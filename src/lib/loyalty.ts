@@ -1,4 +1,4 @@
-﻿export interface LoyaltyPromoConfig {
+export interface LoyaltyPromoConfig {
   enabled: boolean;
   name: string;
   mode: "auto" | "manual";
@@ -41,47 +41,73 @@ export function saveLoyaltyPromoConfig(config: LoyaltyPromoConfig, storeId?: str
   }
 }
 
-export function getCustomerPurchasesCount(customerId?: string, phone?: string): number {
-  if (!customerId && !phone) return 0;
+export function getCustomerPurchasesCount(customerId?: string, phone?: string, name?: string): number {
+  if (!customerId && !phone && !name) return 0;
   try {
-    const key = customerId ? loyalty_stamps_cust_ : loyalty_stamps_phone_;
-    const val = localStorage.getItem(key);
-    if (val !== null) return parseInt(val, 10) || 0;
+    if (customerId) {
+      const val = localStorage.getItem(`loyalty_stamps_cust_${customerId}`);
+      if (val !== null) return parseInt(val, 10) || 0;
+    }
+    if (phone) {
+      const clean = phone.replace(/\D/g, "");
+      if (clean) {
+        const val = localStorage.getItem(`loyalty_stamps_phone_${clean}`);
+        if (val !== null) return parseInt(val, 10) || 0;
+      }
+    }
+    if (name) {
+      const cleanName = name.trim().toLowerCase();
+      if (cleanName) {
+        const val = localStorage.getItem(`loyalty_stamps_name_${cleanName}`);
+        if (val !== null) return parseInt(val, 10) || 0;
+      }
+    }
     return 0;
   } catch {
     return 0;
   }
 }
 
-export function setCustomerPurchasesCount(customerId?: string, phone?: string, count: number = 0) {
-  if (!customerId && !phone) return;
+export function setCustomerPurchasesCount(customerId?: string, phone?: string, count: number = 0, name?: string) {
+  if (!customerId && !phone && !name) return;
   try {
+    const val = String(Math.max(0, count));
     if (customerId) {
-      localStorage.setItem(loyalty_stamps_cust_, String(Math.max(0, count)));
+      localStorage.setItem(`loyalty_stamps_cust_${customerId}`, val);
     }
     if (phone) {
       const clean = phone.replace(/\D/g, "");
-      if (clean) localStorage.setItem(loyalty_stamps_phone_, String(Math.max(0, count)));
+      if (clean) localStorage.setItem(`loyalty_stamps_phone_${clean}`, val);
+    }
+    if (name) {
+      const cleanName = name.trim().toLowerCase();
+      if (cleanName) localStorage.setItem(`loyalty_stamps_name_${cleanName}`, val);
     }
   } catch (e) {
     console.error("Erro ao salvar selos de fidelidade:", e);
   }
 }
 
-export function addCustomerPurchaseStamp(customerId?: string, phone?: string, amount: number = 0, config?: LoyaltyPromoConfig): { newCount: number; wonReward: boolean } {
+export function addCustomerPurchaseStamp(
+  customerId?: string, 
+  phone?: string, 
+  amount: number = 0, 
+  config?: LoyaltyPromoConfig,
+  name?: string
+): { newCount: number; wonReward: boolean } {
   const currentConfig = config || getLoyaltyPromoConfig();
   if (!currentConfig.enabled) return { newCount: 0, wonReward: false };
   if (currentConfig.minPurchaseValue > 0 && amount < currentConfig.minPurchaseValue) {
-    return { newCount: getCustomerPurchasesCount(customerId, phone), wonReward: false };
+    return { newCount: getCustomerPurchasesCount(customerId, phone, name), wonReward: false };
   }
 
-  const currentCount = getCustomerPurchasesCount(customerId, phone);
+  const currentCount = getCustomerPurchasesCount(customerId, phone, name);
   const nextCount = currentCount + 1;
   const target = Math.max(1, currentConfig.targetPurchases || 10);
   
   const wonReward = nextCount >= target;
   const finalCount = wonReward ? nextCount % target : nextCount;
 
-  setCustomerPurchasesCount(customerId, phone, finalCount);
+  setCustomerPurchasesCount(customerId, phone, finalCount, name);
   return { newCount: finalCount, wonReward };
 }

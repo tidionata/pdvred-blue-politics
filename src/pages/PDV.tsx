@@ -1143,10 +1143,16 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
          return;
       }
 
-      // Acumula compra no programa de fidelidade se houver cliente
+      // Acumula compra no programa de fidelidade se houver cliente identificado por Nome, Telefone ou ID
       const loyaltyCfg = getLoyaltyPromoConfig(storeId);
-      if (loyaltyCfg.enabled && (customerId || customerPhone.trim())) {
-        const result = addCustomerPurchaseStamp(customerId || undefined, customerPhone.trim() || undefined, total, loyaltyCfg);
+      if (loyaltyCfg.enabled && (customerId || customerPhone.trim() || customerName.trim())) {
+        const result = addCustomerPurchaseStamp(
+          customerId || undefined, 
+          customerPhone.trim() || undefined, 
+          total, 
+          loyaltyCfg,
+          customerName.trim() || undefined
+        );
         if (result.wonReward) {
           toast.success(`🎉 Cliente completou a meta de fidelidade! Ganhou: ${loyaltyCfg.rewardDescription}`);
         }
@@ -1799,9 +1805,9 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                   {/* Banner de Fidelidade do Cliente Selecionado */}
                   {(() => {
                     const loyaltyCfg = getLoyaltyPromoConfig(storeId);
-                    if (!loyaltyCfg.enabled || (!customerId && !customerPhone.trim())) return null;
+                    if (!loyaltyCfg.enabled || (!customerId && !customerPhone.trim() && !customerName.trim())) return null;
 
-                    const purchasesCount = getCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined);
+                    const purchasesCount = getCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, customerName.trim() || undefined);
                     const target = loyaltyCfg.targetPurchases || 10;
                     const hasReward = purchasesCount >= target;
 
@@ -1814,7 +1820,7 @@ export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boole
                         setDiscount(loyaltyCfg.rewardValue || 0);
                       }
                       // Subtrai a meta ou reseta selos
-                      setCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, purchasesCount - target);
+                      setCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, purchasesCount - target, customerName.trim() || undefined);
                       toast.success(`🎁 Prêmio "${loyaltyCfg.rewardDescription}" aplicado ao pedido!`);
                     };
 

@@ -190,7 +190,7 @@ export default function Clientes() {
                     </TableHeader>
                     <TableBody>
                       {filteredCustomers.map((customer: any) => {
-                        const purchasesCount = getCustomerPurchasesCount(customer.id, customer.phone);
+                        const purchasesCount = getCustomerPurchasesCount(customer.id, customer.phone, customer.name);
                         const target = loyaltyConfig.targetPurchases || 10;
                         const hasReward = loyaltyConfig.enabled && purchasesCount >= target;
 
@@ -274,7 +274,7 @@ export default function Clientes() {
                 /* ── MODO CARDS (GRADE) ── */
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {filteredCustomers.map((customer: any) => {
-                    const purchasesCount = getCustomerPurchasesCount(customer.id, customer.phone);
+                    const purchasesCount = getCustomerPurchasesCount(customer.id, customer.phone, customer.name);
                     const target = loyaltyConfig.targetPurchases || 10;
                     const hasReward = loyaltyConfig.enabled && purchasesCount >= target;
 
