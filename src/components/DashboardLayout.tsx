@@ -8,14 +8,15 @@ import {
   LayoutDashboard, ShoppingCart, Package, TrendingUp,
   BarChart3, Settings, LogOut, Menu, X, ShoppingBag, FileText, Users,
   Lock, ShieldAlert, Download, Sparkles, RefreshCw, CheckCircle2,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, QrCode
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { syncEngine } from "@/lib/syncEngine";
 import { isElectron, toggleFullscreen } from "@/lib/electronPrinting";
+import { SubscriptionPlansModal } from "@/components/SubscriptionPlansModal";
 
 export default function DashboardLayout() {
   const { signOut, user } = useAuth();
@@ -23,6 +24,8 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [blockPayModalOpen, setBlockPayModalOpen] = useState(false);
+  const queryClient = useQueryClient();
 
   // ── Atualizações Automáticas (OTA) ─────────────────────────────────────────
   const [updateInfo, setUpdateInfo] = useState<{
@@ -243,27 +246,64 @@ export default function DashboardLayout() {
   if (shouldBlockAccess) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-        <div className="bg-slate-900 border border-red-500/30 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl space-y-6">
+        <div className="bg-slate-900 border border-red-500/30 rounded-3xl p-8 max-w-lg w-full text-center shadow-2xl space-y-6">
           <div className="w-16 h-16 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center justify-center mx-auto">
             <ShieldAlert className="w-8 h-8" />
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white tracking-tight">Acesso Temporariamente Suspenso</h2>
+            <h2 className="text-2xl font-bold text-white tracking-tight">
+              {isStoreExpired ? "Período de Teste ou Assinatura Expirada" : "Acesso Temporariamente Suspenso"}
+            </h2>
             <p className="text-sm text-slate-400">
-              {storeData?.block_reason || "A licença de uso do sistema para este estabelecimento está expirada ou pendente de regularização."}
+              {storeData?.block_reason || "Seus 7 dias de teste grátis ou a sua mensalidade chegaram ao fim. Para continuar utilizando todas as funções do PDV, efetue a regularização via PIX com ativação instantânea."}
             </p>
           </div>
 
-          <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-xs text-slate-300 text-left space-y-1.5">
-            <p className="font-semibold text-white">Como restabelecer o acesso?</p>
-            <p>Entre em contato com o suporte ou com a administração do sistema para renovar sua licença.</p>
+          {/* Opções de Planos Rápidos */}
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-xs text-slate-300 text-left space-y-3">
+            <p className="font-semibold text-white flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              Planos Disponíveis (Liberação Imediata):
+            </p>
+            <div className="space-y-2">
+              <div className="flex justify-between items-center p-2 rounded-lg bg-slate-900/60 border border-slate-700">
+                <div>
+                  <p className="font-bold text-white">Sem Nota Fiscal</p>
+                  <p className="text-[11px] text-slate-400">PDV, estoque, mesas e relatórios</p>
+                </div>
+                <span className="font-bold text-emerald-400 text-sm">R$ 70/mês</span>
+              </div>
+              <div className="flex justify-between items-center p-2 rounded-lg bg-slate-900/60 border border-blue-500/40">
+                <div>
+                  <p className="font-bold text-blue-300">Sem Nota + Bot WhatsApp</p>
+                  <p className="text-[11px] text-slate-400">Atendimento 24h e cardápio digital</p>
+                </div>
+                <span className="font-bold text-blue-400 text-sm">R$ 100/mês</span>
+              </div>
+              <div className="flex justify-between items-center p-2 rounded-lg bg-slate-900/60 border border-slate-700">
+                <div>
+                  <p className="font-bold text-white">Com Nota Fiscal (NFC-e/NF-e)</p>
+                  <p className="text-[11px] text-slate-400">Homologado SEFAZ e Reforma 2026</p>
+                </div>
+                <span className="font-bold text-emerald-400 text-sm">R$ 240/mês</span>
+              </div>
+            </div>
             {storeData?.expires_at && (
-              <p className="text-[11px] text-amber-400 font-mono pt-1">
-                Data de expiração: {new Date(storeData.expires_at).toLocaleDateString("pt-BR")}
+              <p className="text-[11px] text-amber-400 font-mono pt-1 text-center">
+                Data do término: {new Date(storeData.expires_at).toLocaleDateString("pt-BR")}
               </p>
             )}
           </div>
+
+          {/* Botão de Destaque para Pagamento PIX */}
+          <Button
+            onClick={() => setBlockPayModalOpen(true)}
+            className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2 text-sm shadow-lg shadow-emerald-600/30"
+          >
+            <QrCode className="w-5 h-5" />
+            Pagar com PIX e Desbloquear Agora
+          </Button>
 
           <div className="flex gap-2">
             <Button
@@ -272,7 +312,7 @@ export default function DashboardLayout() {
               className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
             >
               <RefreshCw className="w-4 h-4 mr-2" />
-              Verificar Novamente
+              Já Paguei / Checar
             </Button>
             <Button
               variant="destructive"
@@ -284,6 +324,19 @@ export default function DashboardLayout() {
             </Button>
           </div>
         </div>
+
+        {/* Modal PIX para Desbloqueio Instantâneo */}
+        {storeId && (
+          <SubscriptionPlansModal
+            open={blockPayModalOpen}
+            onOpenChange={setBlockPayModalOpen}
+            storeId={storeId}
+            onPaymentSuccess={() => {
+              queryClient.invalidateQueries({ queryKey: ["store-license-status"] });
+              window.location.reload();
+            }}
+          />
+        )}
       </div>
     );
   }

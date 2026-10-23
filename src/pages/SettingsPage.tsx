@@ -22,6 +22,7 @@ import {
 import { cn, getSoundConfig, saveSoundConfig, playNotificationSound, SOUND_OPTIONS, type SoundConfig } from "@/lib/utils";
 import { getLoyaltyPromoConfig, saveLoyaltyPromoConfig, type LoyaltyPromoConfig } from "@/lib/loyalty";
 import { getPromissoriaConfig, savePromissoriaConfig, type PromissoriaConfig } from "@/lib/promissoria";
+import { SubscriptionPlansModal, SUBSCRIPTION_PLANS, type PlanOption } from "@/components/SubscriptionPlansModal";
 import {
   SEFAZ_BY_UF, UF_NAMES, SERVICO_LABELS,
   type SefazServico,
@@ -167,7 +168,7 @@ export default function SettingsPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("stores")
-        .select("id, name, active_menu_type, table_count, has_counters, counter_count, table_fee")
+        .select("id, name, active_menu_type, table_count, has_counters, counter_count, table_fee, status, expires_at, plan_type")
         .eq("id", profile!.store_id!)
         .single();
       if (error) throw error;
@@ -247,7 +248,9 @@ export default function SettingsPage() {
     onError: (e: any) => toast.error(`Erro ao salvar impostos: ${e.message}`),
   });
 
-  // ── Query: assinatura (Stripe) ─────────────────────────────────────────────
+  const [subModalOpen, setSubModalOpen] = useState(false);
+
+  // ── Query: assinatura e faturas PIX Asaas ───────────────────────────────────
   const { data: subscription, isLoading: subLoading } = useQuery({
     queryKey: ["subscription", profile?.store_id],
     enabled: !!profile?.store_id,
@@ -259,6 +262,21 @@ export default function SettingsPage() {
         .maybeSingle();
       if (error) throw error;
       return data;
+    },
+  });
+
+  const { data: subCharges, isLoading: subChargesLoading } = useQuery({
+    queryKey: ["subscription_charges", profile?.store_id],
+    enabled: !!profile?.store_id && activeTab === "assinatura",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("subscription_charges")
+        .select("*")
+        .eq("store_id", profile!.store_id!)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      return data || [];
     },
   });
 
@@ -1323,76 +1341,181 @@ export default function SettingsPage() {
               
               <Separator />
 
-              <h3 className="font-bold text-lg">Trocar ou Assinar Plano</h3>
-              <p className="text-sm text-muted-foreground -mt-4">Escolha o plano ideal para o seu negócio e faça o upgrade instantaneamente.</p>
-              <div className="flex justify-center mt-4">
-                <div className="w-full max-w-sm">
+              <Separator />
+
+              <h3 className="font-bold text-lg">Planos e Mensalidades</h3>
+              <p className="text-sm text-muted-foreground -mt-4">Escolha a opção ideal para a sua loja e renove instantaneamente via PIX.</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                 {[
-                  { 
-                    id: "premium", 
-                    name: "Premium", 
-                    price: "Sob consulta", 
-                    items: "Produtos ilimitados", 
-                    user: "Usuários ilimitados",
-                    description: "Tudo liberado para sua loja crescer"
-                  }
+                  {
+                    id: "sem_nota",
+                    name: "Sem Nota Fiscal",
+                    badge: "Mais Popular",
+                    price: "70",
+                    period: "/mês",
+                    description: "PDV completo sem emissão fiscal.",
+                    features: [
+                      "Frente de Caixa (PDV)",
+                      "Controle de Estoque & Produtos",
+                      "Catálogo Online & Pedidos",
+                      "Relatórios de Vendas & Caixa",
+                      "Integração iFood Delivery",
+                    ],
+                  },
+                  {
+                    id: "sem_nota_bot",
+                    name: "Sem Nota + Bot WhatsApp",
+                    badge: "Automação",
+                    price: "100",
+                    period: "/mês",
+                    description: "PDV completo com robô de atendimento WhatsApp.",
+                    features: [
+                      "Tudo do Plano Sem Nota",
+                      "Robô de WhatsApp Integrado",
+                      "Envio automático de cardápio",
+                      "Status de pedido no WhatsApp",
+                      "Suporte prioritário",
+                    ],
+                  },
+                  {
+                    id: "com_nota",
+                    name: "Com Nota Fiscal (NFC-e / NF-e)",
+                    badge: "Fiscal Completo",
+                    price: "240",
+                    period: "/mês",
+                    setup: "+ R$ 450,00 de implantação fiscal",
+                    description: "Emissão de notas fiscais ilimitadas pelo sistema.",
+                    features: [
+                      "Tudo do Plano Completo",
+                      "Emissão de NFC-e e NF-e",
+                      "Configuração de tributos e impostos",
+                      "Backup de XMLs para contabilidade",
+                      "Implantação e suporte fiscal",
+                    ],
+                  },
                 ].map((p) => (
-                  <div key={p.id} className={cn(
-                    "relative p-5 rounded-2xl border-2 transition-all flex flex-col gap-4 shadow-sm",
-                    subscription?.plan === p.id 
-                      ? "border-primary bg-primary/5 ring-1 ring-primary/20" 
-                      : "border-border hover:border-primary/40 hover:shadow-md bg-card"
-                  )}>
-                    {subscription?.plan === p.id && (
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">
-                        Plano Atual
-                      </span>
+                  <div
+                    key={p.id}
+                    className={cn(
+                      "relative p-5 rounded-2xl border-2 transition-all flex flex-col justify-between shadow-sm bg-card hover:border-primary/50",
+                      p.id === "sem_nota" && "border-primary/60 ring-1 ring-primary/20"
                     )}
-                    
-                    <div className="space-y-1">
-                      <h4 className="font-bold text-lg">{p.name}</h4>
-                      <p className="text-[11px] text-muted-foreground leading-tight">{p.description}</p>
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider bg-primary/10 text-primary px-2.5 py-0.5 rounded-full">
+                          {p.badge}
+                        </span>
+                      </div>
+
+                      <h4 className="font-bold text-base">{p.name}</h4>
+                      <p className="text-[11px] text-muted-foreground mt-1 mb-3 leading-snug">{p.description}</p>
+
+                      <div className="flex items-baseline gap-1 my-2">
+                        <span className="text-3xl font-black text-foreground">R$ {p.price}</span>
+                        <span className="text-xs text-muted-foreground">{p.period}</span>
+                      </div>
+                      {p.setup && (
+                        <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 p-1.5 rounded-md mb-3 border border-amber-200">
+                          ⚙️ {p.setup}
+                        </p>
+                      )}
+
+                      <ul className="space-y-2 my-4">
+                        {p.features.map((feat, idx) => (
+                          <li key={idx} className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                            <span>{feat}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
 
-                    <div className="flex items-baseline gap-1">
-                      {p.price === "Sob consulta" ? (
-                        <span className="text-2xl font-black text-foreground">{p.price}</span>
-                      ) : (
-                        <>
-                          <span className="text-2xl font-black text-foreground">R${p.price}</span>
-                          <span className="text-xs text-muted-foreground">/mês</span>
-                        </>
-                      )}
-                    </div>
-
-                    <ul className="space-y-2 flex-1">
-                      <li className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" /> {p.items}
-                      </li>
-                      <li className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" /> {p.user}
-                      </li>
-                    </ul>
-
-                    <Button 
-                      className={cn(
-                        "w-full font-bold transition-all",
-                        subscription?.plan === p.id ? "bg-muted text-muted-foreground" : "hover:scale-[1.02] active:scale-[0.98]"
-                      )}
-                      variant={subscription?.plan === p.id ? "secondary" : "default"}
-                      disabled={checkoutMutation.isPending || subscription?.plan === p.id}
-                      onClick={() => checkoutMutation.mutate(p.id)}
+                    <Button
+                      className="w-full font-bold gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md mt-4"
+                      disabled={pixMutation.isPending}
+                      onClick={() => pixMutation.mutate(p.id)}
                     >
-                      {checkoutMutation.isPending 
-                        ? "Carregando..." 
-                        : subscription?.plan === p.id 
-                          ? "Plano Ativo" 
-                          : "Assinar Agora"}
+                      <Sparkles className="h-4 w-4" />
+                      {pixMutation.isPending ? "Gerando PIX..." : "Pagar com PIX"}
                     </Button>
                   </div>
                 ))}
-                </div>
               </div>
+
+              {/* Modal de Pagamento PIX Asaas */}
+              {pixModalOpen && pixData && (
+                <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-6 space-y-5 animate-in fade-in zoom-in-95">
+                    <div className="flex items-center justify-between border-b pb-3">
+                      <div>
+                        <h3 className="font-bold text-base text-gray-900 flex items-center gap-2">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                          Pagamento via PIX
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">{pixData.plan_name}</p>
+                      </div>
+                      <button onClick={() => setPixModalOpen(false)} className="p-1.5 rounded-full hover:bg-muted text-muted-foreground">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="text-center space-y-3">
+                      <div className="bg-emerald-50 text-emerald-800 rounded-xl p-3 border border-emerald-100">
+                        <span className="text-xs uppercase font-bold tracking-wider block">Valor a Pagar:</span>
+                        <span className="text-2xl font-black">
+                          {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(pixData.amount)}
+                        </span>
+                      </div>
+
+                      {pixData.pix_qr_code && (
+                        <div className="flex justify-center p-2 bg-white border-2 border-dashed rounded-2xl">
+                          <img src={pixData.pix_qr_code} alt="QR Code PIX" className="w-52 h-52 object-contain" />
+                        </div>
+                      )}
+
+                      <p className="text-xs text-muted-foreground">
+                        Abra o app do seu banco, escolha <strong>Pagar via PIX</strong> e aponte a câmera para o QR Code acima.
+                      </p>
+
+                      {pixData.pix_copy_paste && (
+                        <div className="space-y-1.5 text-left">
+                          <Label className="text-xs font-semibold text-gray-700">Código PIX Copia e Cola:</Label>
+                          <div className="flex gap-2">
+                            <Input value={pixData.pix_copy_paste} readOnly className="text-xs font-mono h-9 bg-muted/40" />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="shrink-0 gap-1.5"
+                              onClick={() => {
+                                navigator.clipboard.writeText(pixData.pix_copy_paste);
+                                toast.success("Código PIX copiado com sucesso!");
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" /> Copiar
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-2 pt-2">
+                      <Button
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2"
+                        disabled={checkPaymentMutation.isPending}
+                        onClick={() => checkPaymentMutation.mutate(pixData.asaas_payment_id)}
+                      >
+                        <RefreshCw className={cn("h-4 w-4", checkPaymentMutation.isPending && "animate-spin")} />
+                        {checkPaymentMutation.isPending ? "Verificando..." : "Já realizei o pagamento"}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setPixModalOpen(false)}>
+                        Fechar
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -2604,9 +2727,205 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+      {/* ── ABA: MINHA ASSINATURA & PLANOS ───────────────────────────────── */}
+      {activeTab === "assinatura" && (
+        <div className="space-y-6">
+          {/* Status Geral da Licença */}
+          {(() => {
+            const expiresAt = store?.expires_at ? new Date(store.expires_at) : null;
+            const now = new Date();
+            const daysLeft = expiresAt ? Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+            const isExpired = expiresAt ? expiresAt.getTime() < now.getTime() : false;
+            const isActive = store?.status === "active" && !isExpired;
+
+            return (
+              <div className={cn(
+                "rounded-2xl p-6 border shadow-sm flex flex-col md:flex-row items-center justify-between gap-6",
+                isActive ? "bg-gradient-to-r from-emerald-900/10 via-emerald-800/5 to-transparent border-emerald-300" : "bg-gradient-to-r from-amber-900/10 via-amber-800/5 to-transparent border-amber-300"
+              )}>
+                <div className="space-y-2 text-center md:text-left">
+                  <div className="flex items-center justify-center md:justify-start gap-2">
+                    <Badge className={isActive ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"}>
+                      {isActive ? "Licença Ativa" : isExpired ? "Licença Vencida" : "Período de Teste"}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground font-mono">
+                      Loja: {store?.name || "Meu Estabelecimento"}
+                    </span>
+                  </div>
+
+                  <h3 className="text-2xl font-bold font-['Space_Grotesk'] text-slate-900">
+                    {isActive
+                      ? `${daysLeft} dias restantes de acesso`
+                      : isExpired
+                      ? "Seu período de acesso expirou"
+                      : "Teste Grátis de 7 Dias em andamento"}
+                  </h3>
+
+                  <p className="text-xs text-muted-foreground">
+                    {expiresAt ? (
+                      <>Válido até <strong>{expiresAt.toLocaleDateString("pt-BR")} às {expiresAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</strong>.</>
+                    ) : (
+                      "Renove ou ative seu plano via PIX para manter o PDV sempre funcionando."
+                    )}
+                  </p>
+                </div>
+
+                <div className="shrink-0 flex gap-3">
+                  <Button
+                    onClick={() => setSubModalOpen(true)}
+                    className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-600/20 px-6 py-6 text-sm"
+                  >
+                    <Sparkles className="h-5 w-5" />
+                    Renovar / Mudar Plano via PIX
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Cards dos 3 Planos Disponíveis */}
+          <div className="space-y-3">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Star className="h-5 w-5 text-amber-500 fill-amber-500" />
+              Planos Oficiais PDV Total
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Pagamento 100% automatizado via PIX Asaas com compensação imediata no sistema.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
+              {SUBSCRIPTION_PLANS.map((plan) => (
+                <Card
+                  key={plan.id}
+                  className={cn(
+                    "relative flex flex-col justify-between border-2 transition-all hover:shadow-lg",
+                    plan.recommended
+                      ? "border-blue-600 bg-blue-50/10 shadow-md ring-2 ring-blue-500/20"
+                      : "border-slate-200 bg-white"
+                  )}
+                >
+                  {plan.badge && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                      <Badge className="bg-blue-600 text-white font-semibold text-[11px] shadow">
+                        {plan.badge}
+                      </Badge>
+                    </div>
+                  )}
+
+                  <CardHeader className="pb-4">
+                    <CardTitle className="text-lg font-bold text-slate-900">{plan.name}</CardTitle>
+                    <div className="mt-2 flex items-baseline gap-1">
+                      <span className="text-3xl font-black text-slate-900">{plan.priceDisplay}</span>
+                      <span className="text-xs text-muted-foreground font-medium">{plan.periodDisplay}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                      {plan.description}
+                    </p>
+                  </CardHeader>
+
+                  <CardContent className="space-y-4 pt-0">
+                    <div className="space-y-2 border-t pt-4">
+                      {plan.features.map((feat, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs text-slate-700">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                          <span>{feat}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      onClick={() => setSubModalOpen(true)}
+                      className={cn(
+                        "w-full mt-4 gap-2 font-bold",
+                        plan.recommended
+                          ? "bg-blue-600 hover:bg-blue-700 text-white shadow"
+                          : "bg-slate-900 hover:bg-slate-800 text-white"
+                      )}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      Assinar via PIX
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+
+          {/* Histórico de Faturas PIX da Loja */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-slate-600" />
+                Histórico de Faturas & Pagamentos PIX
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {subChargesLoading ? (
+                <div className="py-6 text-center text-xs text-muted-foreground">Carregando faturas...</div>
+              ) : !subCharges || subCharges.length === 0 ? (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  Nenhuma fatura PIX registrada até o momento. Ao gerar uma cobrança, ela aparecerá aqui.
+                </div>
+              ) : (
+                <div className="divide-y border rounded-xl overflow-hidden bg-card text-xs">
+                  {subCharges.map((ch: any) => (
+                    <div key={ch.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-900">{ch.plan_name}</span>
+                          <Badge
+                            variant={ch.status === "CONFIRMED" ? "default" : "secondary"}
+                            className={ch.status === "CONFIRMED" ? "bg-emerald-600 text-white text-[10px]" : "bg-amber-100 text-amber-800 text-[10px]"}
+                          >
+                            {ch.status === "CONFIRMED" ? "Pago / Confirmado" : "Pendente"}
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Criada em: {new Date(ch.created_at).toLocaleString("pt-BR")}
+                          {ch.paid_at && ` · Pago em: ${new Date(ch.paid_at).toLocaleString("pt-BR")}`}
+                        </p>
+                      </div>
+
+                      <div className="text-right flex items-center justify-between sm:justify-end gap-3">
+                        <span className="font-black text-slate-800 text-sm">
+                          R$ {Number(ch.amount).toFixed(2).replace(".", ",")}
+                        </span>
+                        {ch.status !== "CONFIRMED" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setSubModalOpen(true)}
+                            className="text-xs h-7 gap-1 border-blue-300 text-blue-700"
+                          >
+                            Abrir QR Code
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
+      )}
+
+      {/* Modal Unificado de Planos e Pagamento PIX */}
+      {storeId && (
+        <SubscriptionPlansModal
+          open={subModalOpen}
+          onOpenChange={setSubModalOpen}
+          storeId={storeId}
+          onPaymentSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["store"] });
+            queryClient.invalidateQueries({ queryKey: ["subscription"] });
+            queryClient.invalidateQueries({ queryKey: ["subscription_charges"] });
+            queryClient.invalidateQueries({ queryKey: ["store-license-status"] });
+          }}
+        />
       )}
 
     </div>
   );
 }
+
