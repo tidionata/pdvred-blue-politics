@@ -2727,6 +2727,9 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </div>
+      )}
+
       {/* ── ABA: MINHA ASSINATURA & PLANOS ───────────────────────────────── */}
       {activeTab === "assinatura" && (
         <div className="space-y-6">
