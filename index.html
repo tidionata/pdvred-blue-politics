@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR" class="notranslate" translate="no">
+  <head>
+    <meta name="google" content="notranslate" />
+    <script>
+      (function() {
+        if (typeof Node === "undefined" || !Node.prototype) return;
+        var origRemove = Node.prototype.removeChild;
+        Node.prototype.removeChild = function(child) {
+          if (child && child.parentNode !== this) {
+            if (child.parentNode) {
+              return origRemove.call(child.parentNode, child);
+            }
+            return child;
+          }
+          return origRemove.apply(this, arguments);
+        };
+        var origInsert = Node.prototype.insertBefore;
+        Node.prototype.insertBefore = function(newNode, refNode) {
+          if (refNode && refNode.parentNode !== this) {
+            return origInsert.call(this, newNode, null);
+          }
+          return origInsert.apply(this, arguments);
+        };
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDVTOTAL v1.3.10</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <meta name="description" content="PDVTOTAL — Sistema de Ponto de Venda" />
+    <meta name="author" content="PDVTOTAL" />
+
+    <meta property="og:title" content="PDVTOTAL" />
+    <meta property="og:description" content="PDVTOTAL — Sistema de Ponto de Venda" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@PDVTOTAL" />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

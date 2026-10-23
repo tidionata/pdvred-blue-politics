@@ -1,0 +1,3039 @@
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { toast } from "sonner";
+import { QRCodeSVG } from "qrcode.react";
+import {
+  ShoppingCart, Search, Plus, Minus, Trash2, CreditCard,
+  Banknote, QrCode, Receipt, Percent, DollarSign, X, Printer,
+  CheckCircle2, Image as ImageIcon, UtensilsCrossed, Edit2, Pencil,
+  History, Ban, RotateCcw, AlertTriangle, Sparkles, Award, Gift, FileText,
+  Vault, Lock, Unlock, ArrowDownRight, ArrowUpRight, Coins, MessageSquare, Keyboard,
+} from "lucide-react";
+import type { Tables } from "@/integrations/supabase/types";
+import { printToKitchen, buildKitchenReceiptHtml } from "@/lib/electronPrinting";
+import { db } from "@/lib/db";
+import { sounds } from "@/lib/sound";
+import { CustomerSearchModal } from "@/components/Clientes/CustomerSearchModal";
+import { ClienteFormModal } from "@/components/Clientes/ClienteFormModal";
+import { getLoyaltyPromoConfig, getCustomerPurchasesCount, addCustomerPurchaseStamp, setCustomerPurchasesCount } from "@/lib/loyalty";
+import { getPromissoriaConfig, createPromissoria, calculateInstallments, restorePromissoriasFromDexie, type PromissoriaInstallment, type PromissoriaPlanType } from "@/lib/promissoria";
+import { getActiveCaixa, openCaixa, addCaixaMovement, closeCaixa, recordSaleInCaixa, restoreCaixaFromDexie, type CaixaSession } from "@/lib/caixa";
+
+type Product = Tables<"products">;
+
+interface CartItem {
+  cartItemId: string;
+  product: Product;
+  quantity: number;
+  selectedAdditionals?: { name: string; price: number }[];
+  unitPrice: number;
+}
+
+// ─── Ticket de Dados para o Cupom ───────────────────────────────────────────
+interface SaleTicket {
+  saleId: string;
+  senha: number;
+  items: CartItem[];
+  subtotal: number;
+  discountValue: number;
+  total: number;
+  paymentMethod: string;
+  cashierName: string;
+  storeName: string;
+  storeCnpj: string;
+  storeAddress: string;
+  storeCity: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerDocument?: string;
+  deliveryAddress?: string;
+  deliveryNotes?: string;
+  createdAt: Date;
+  nfceKey?: string;
+  nfceUrl?: string;
+  trackingUrl?: string;
+  sellerName?: string;
+  sellerCommission?: number;
+  promissoriaPlan?: string;
+  promissoriaInstallments?: PromissoriaInstallment[];
+  paidAmount?: number;
+  changeAmount?: number;
+}
+
+const fmt = (v: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+
+const fmtQty = (v: number) => {
+  if (Number.isInteger(v)) {
+    return v.toString();
+  }
+  return v.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+};
+
+const paymentLabel: Record<string, string> = {
+  cash: "DINHEIRO",
+  credit: "CARTÃO CRÉDITO",
+  debit: "CARTÃO DÉBITO",
+  pix: "PIX",
+  promissoria: "PROMISSÓRIA / A PRAZO",
+};
+
+// ─── Componente Cupom (só para impressão + visualização) ─────────────────────
+function Cupom({ ticket, printRef }: { ticket: SaleTicket; printRef: React.RefObject<HTMLDivElement> }) {
+  const dateStr = ticket.createdAt.toLocaleString("pt-BR");
+  const totalItems = ticket.items.reduce((s, i) => s + i.quantity, 0);
+  const isFiscalEnabled = localStorage.getItem("pdv_enable_fiscal") === "true" && !!ticket.nfceKey;
+
+  return (
+    <div
+      ref={printRef}
+      className="bg-white text-black font-mono text-[11px] leading-tight p-2 sm:p-4 w-full max-w-[280px] mx-auto select-text"
+      style={{ fontFamily: "'Courier New', Courier, monospace" }}
+    >
+      {/* 1. Acompanhe seu pedido (Topo) */}
+      {ticket.trackingUrl && (
+        <div className="flex flex-col items-center text-center space-y-1 mb-3">
+          <div className="border border-black p-2 rounded-sm w-full mb-1">
+            <p className="text-[13px] font-bold">ACOMPANHE SEU PEDIDO</p>
+            <p className="text-[12px]">ATRAVÉS DO CELULAR</p>
+            <p className="text-[10px]">É SÓ LER O QRCODE</p>
+          </div>
+          <QRCodeSVG value={ticket.trackingUrl} size={110} level="M" />
+        </div>
+      )}
+
+      {/* 2. Cabeçalho (Senha, Loja) */}
+      <div className="text-center space-y-0.5 mb-2">
+        <p className="text-[16px] font-bold tracking-widest uppercase mb-1">
+          SENHA: {String(ticket.senha).padStart(3, "0")}
+        </p>
+        <p className="font-bold text-[12px] uppercase">{ticket.storeName}</p>
+        {ticket.storeCnpj && (
+          <p className="text-[10px] uppercase">
+            CNPJ: {ticket.storeCnpj} {isFiscalEnabled ? (ticket.nfceKey ? "IE: CONFERIR" : "IE: 000000000000") : ""}
+          </p>
+        )}
+        {ticket.storeAddress && <p className="text-[10px] uppercase">{ticket.storeAddress}</p>}
+        {ticket.storeCity && <p className="text-[10px] uppercase">{ticket.storeCity}</p>}
+        <p className="text-[10px] mt-1 font-semibold uppercase">
+          {isFiscalEnabled
+            ? "Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica"
+            : "Comprovante de Venda Não Fiscal"}
+        </p>
+      </div>
+
+      <div className="border-t border-dashed border-black my-1" />
+
+      {/* 3. Itens */}
+      <table className="w-full text-[10px] mb-2 border-collapse">
+        <thead>
+          <tr>
+            <th className="text-left font-bold pb-1" colSpan={4}>Cód. Descrição</th>
+          </tr>
+          <tr className="border-b border-black border-dashed">
+            <th className="text-left font-bold pb-1 w-[20%]">Qtd</th>
+            <th className="text-left font-bold pb-1 w-[20%]">UN</th>
+            <th className="text-right font-bold pb-1 w-[30%]">Vl Unit</th>
+            <th className="text-right font-bold pb-1 w-[30%]">Vl Total</th>
+          </tr>
+        </thead>
+          {ticket.items.map((item, idx) => {
+            const itemTotal = item.unitPrice * item.quantity;
+            return (
+              <tbody key={item.product.id}>
+                <tr>
+                  <td colSpan={4} className="text-left uppercase font-medium pt-1">
+                    {String(idx + 1).padStart(3, "0")} - {item.product.name}
+                    {item.selectedAdditionals && item.selectedAdditionals.length > 0 && (
+                      <div className="text-[9px] text-gray-700 font-normal ml-2">
+                        + {item.selectedAdditionals.map((a) => a.name).join(", ")}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="text-left pb-1">{fmtQty(item.quantity)}</td>
+                  <td className="text-left uppercase pb-1">{(item.product as any).unit ?? "UN"}</td>
+                  <td className="text-right pb-1">{item.unitPrice.toFixed(2).replace(".", ",")}</td>
+                  <td className="text-right font-semibold pb-1">{itemTotal.toFixed(2).replace(".", ",")}</td>
+                </tr>
+              </tbody>
+            );
+          })}
+      </table>
+      <div className="border-t border-dashed border-black my-1" />
+
+      {/* 4. Totais */}
+      <div className="space-y-0.5 text-[10px]">
+        <div className="flex justify-between">
+          <span>Qtd. Total de itens</span>
+          <span>{totalItems}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Valor Total dos Itens R$</span>
+          <span>{ticket.subtotal.toFixed(2).replace(".", ",")}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Valor Descontos R$</span>
+          <span>{ticket.discountValue.toFixed(2).replace(".", ",")}</span>
+        </div>
+        <div className="flex justify-between font-bold">
+          <span>Valor Total a Pagar R$</span>
+          <span>{ticket.total.toFixed(2).replace(".", ",")}</span>
+        </div>
+        <div className="flex justify-between uppercase">
+          <span>{paymentLabel[ticket.paymentMethod] ?? ticket.paymentMethod}</span>
+          <span>{ticket.total.toFixed(2).replace(".", ",")}</span>
+        </div>
+        {ticket.paidAmount !== undefined && ticket.paidAmount > 0 && (
+          <div className="flex justify-between">
+            <span>Valor Recebido R$</span>
+            <span>{ticket.paidAmount.toFixed(2).replace(".", ",")}</span>
+          </div>
+        )}
+        {ticket.changeAmount !== undefined && ticket.changeAmount > 0 && (
+          <div className="flex justify-between font-bold">
+            <span>Troco R$</span>
+            <span>{ticket.changeAmount.toFixed(2).replace(".", ",")}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-dashed border-black my-1" />
+
+      {/* 5. Tributos (Apenas se emitido com NFC-e) */}
+      {isFiscalEnabled && (
+        <>
+          <div className="text-[10px] space-y-0.5">
+            <div className="flex justify-between">
+              <span>Informação dos Tributos Totais</span>
+              <span>{(ticket.total * 0.12).toFixed(2).replace(".", ",")}</span>
+            </div>
+            <p>Incidentes (Lei Federal 12.741/2012)</p>
+          </div>
+          <div className="border-t border-dashed border-black my-1" />
+        </>
+      )}
+
+      {/* 6. Operador e Consumidor */}
+      <div className="text-center text-[10px] space-y-0.5 uppercase">
+        <p>CX: CAIXA1 &nbsp;&nbsp;&nbsp; OP: {ticket.cashierName}</p>
+        <p className="font-bold text-[12px]">VND: {String(ticket.saleId?.slice(-4) ?? "0000")}</p>
+        <p className="font-bold text-[12px]">SENHA: {String(ticket.senha).padStart(3, "0")}</p>
+        <p className="text-[9px] text-gray-700">{dateStr}</p>
+      </div>
+
+      <div className="border-t border-dashed border-black my-1" />
+
+      <div className="text-[9px] text-center space-y-0.5 my-1">
+        <p>CONSUMIDOR: {ticket.customerName ? `${ticket.customerName} ${ticket.customerPhone ? `- ${ticket.customerPhone}` : ""}` : "Consumidor não identificado"}</p>
+        {ticket.deliveryAddress && <p>ENDEREÇO: {ticket.deliveryAddress}</p>}
+        {ticket.deliveryNotes && <p>OBS: {ticket.deliveryNotes}</p>}
+      </div>
+
+      {/* Termo de Nota Promissória / Consignado / Crediário */}
+      {ticket.paymentMethod === "promissoria" && ticket.promissoriaInstallments && (
+        <>
+          <div className="border-t-2 border-dashed border-black my-2" />
+          <div className="text-[9px] space-y-1.5 text-center font-mono bg-slate-50/50 p-1 rounded">
+            <div className="border border-black p-1">
+              <p className="font-bold text-[11px] uppercase tracking-wider">*** NOTA PROMISSÓRIA / CREDIÁRIO ***</p>
+              <p className="text-[8.5px] uppercase font-semibold">VIA DA LOJA (COMPROVANTE DE DÍVIDA)</p>
+            </div>
+            
+            <p className="text-[8.5px] text-justify pt-1 leading-tight">
+              Reconheço(emos) a exatidão desta dívida no valor total de <strong>R$ {ticket.total.toFixed(2).replace(".", ",")}</strong> e me comprometo a efetuar o pagamento nas seguintes datas e parcelas:
+            </p>
+
+            <div className="text-left space-y-1 py-1 border-t border-b border-black">
+              {ticket.promissoriaInstallments.map((inst) => (
+                <div key={inst.installmentNumber} className="flex justify-between items-center text-[9.5px]">
+                  <span className="font-medium">
+                    PARCELA {inst.installmentNumber}/{ticket.promissoriaInstallments!.length} - VENC: <strong>{new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}</strong>
+                  </span>
+                  <span className="font-bold text-[10px]">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="text-left text-[8.5px] space-y-0.5 pt-0.5">
+              <p><strong>DEVEDOR:</strong> {ticket.customerName || "Cliente não identificado"}</p>
+              {ticket.customerDocument && <p><strong>CPF/RG:</strong> {ticket.customerDocument}</p>}
+              {ticket.customerPhone && <p><strong>TELEFONE:</strong> {ticket.customerPhone}</p>}
+            </div>
+
+            <div className="pt-6 pb-2">
+              <div className="border-b border-black w-11/12 mx-auto" />
+              <p className="text-[8.5px] mt-1 font-bold uppercase">
+                ASSINATURA DO DEVEDOR: {ticket.customerName || "CLIENTE"}
+              </p>
+            </div>
+          </div>
+          <div className="border-t-2 border-dashed border-black my-2" />
+        </>
+      )}
+
+      {/* 7. NFC-e Info (Apenas se emitido com chave real autorizada) */}
+      {isFiscalEnabled ? (
+        <div className="text-[9px] text-center space-y-1 mt-2">
+          <div className="border-t border-dashed border-black my-1" />
+          <p>Consulte pela Chave de Acesso em</p>
+          <p>http://www.nfce.sefaz.gov.br/consulta</p>
+          <p className="break-all my-1 font-mono">{ticket.nfceKey}</p>
+          <p>NFC-e n°{String(ticket.saleId?.slice(-4) ?? "0000")} Serie:1 {dateStr} Via Consumidor</p>
+          <p className="font-bold uppercase mt-1">EMITIDA EM CONTINGÊNCIA</p>
+          <p className="font-bold uppercase mb-2">Pendente de autorização</p>
+          
+          <div className="flex justify-center mt-2 mb-2">
+            {ticket.nfceUrl ? (
+              <QRCodeSVG value={ticket.nfceUrl} size={110} level="M" />
+            ) : (
+              <QRCodeSVG value={`https://www.sefaz.gov.br/nfce/qrcode?chNFe=${ticket.nfceKey}`} size={110} level="M" />
+            )}
+          </div>
+          <p className="text-[8px] mt-2">Trib. Aprox.: {(ticket.total * 0.05).toFixed(2).replace(".", ",")} Fed, {(ticket.total * 0.07).toFixed(2).replace(".", ",")} Est, FONTE: IBPT</p>
+        </div>
+      ) : (
+        <div className="text-[9px] text-center space-y-0.5 mt-2 text-gray-700">
+          <p className="font-semibold">*** OBRIGADO PELA PREFERÊNCIA! ***</p>
+          <p>Documento auxiliar de conferência de pedido.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Modal de Cupom ──────────────────────────────────────────────────────────
+function CupomModal({
+  ticket,
+  open,
+  onClose,
+}: {
+  ticket: SaleTicket | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const printRef = useRef<HTMLDivElement>(null);
+  const [emittingNfe, setEmittingNfe] = useState(false);
+
+  useEffect(() => {
+    if (open && localStorage.getItem("pdv_autoprint") === "true") {
+      // Pequeno atraso para garantir que o DOM do cupom foi renderizado
+      const timer = setTimeout(handlePrint, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
+
+  const handleEmitNFe = async () => {
+    if (!ticket) return;
+    try {
+      setEmittingNfe(true);
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id;
+      if (!userId) throw new Error("Usuário não autenticado");
+
+      const { data: userData } = await supabase.from('profiles').select('store_id').eq('id', userId).single();
+      const storeId = userData?.store_id;
+
+      if (!storeId) throw new Error("Loja não encontrada");
+
+      const itemsDesc = ticket.items.map(i => `${i.quantity}x ${i.product.name}`).join(", ");
+
+      const nfePayload = {
+        action: 'create_invoice',
+        storeId: storeId,
+        payload: {
+          customerName: ticket.customerName || 'Consumidor Final',
+          customerCpfCnpj: '', 
+          value: ticket.total,
+          serviceDescription: `Venda PDV - Itens: ${itemsDesc}`
+        }
+      };
+
+      const { data, error } = await supabase.functions.invoke('asaas-api', {
+        body: nfePayload
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      
+      toast.success("NF-e emitida com sucesso no Asaas!");
+    } catch (err: any) {
+      toast.error("Erro ao emitir NF-e: " + err.message);
+    } finally {
+      setEmittingNfe(false);
+    }
+  };
+
+  const handlePrint = async () => {
+    const content = printRef.current;
+    if (!content) return;
+
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Cupom Fiscal</title>
+          <style>
+            @page { 
+              size: 80mm auto; 
+              margin: 0mm !important; 
+            }
+            *, *::before, *::after {
+              box-sizing: border-box !important;
+              color: #000000 !important;
+            }
+            html, body { 
+              margin: 0 !important; 
+              padding: 0 !important; 
+              width: 72mm !important; 
+              max-width: 72mm !important;
+              font-family: 'Courier New', Courier, monospace !important; 
+              font-size: 11px !important; 
+              line-height: 1.25 !important; 
+              color: #000000 !important; 
+              background: #ffffff !important;
+              font-weight: 600 !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            
+            .flex { display: flex; }
+            .flex-col { flex-direction: column; }
+            .items-center { align-items: center; }
+            .justify-between { justify-content: space-between; }
+            .justify-center { justify-content: center; }
+            .text-center { text-align: center; }
+            .text-left { text-align: left; }
+            .text-right { text-align: right; }
+            .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            
+            .p-2 { padding: 4px; }
+            .p-4 { padding: 8px; }
+            .pl-1 { padding-left: 2px; }
+            .pl-8 { padding-left: 16px; }
+            .pr-1 { padding-right: 2px; }
+            .pb-1 { padding-bottom: 2px; }
+            .pt-1 { padding-top: 2px; }
+            .ml-2 { margin-left: 4px; }
+            .m-0 { margin: 0; }
+            .mb-0\\.5 { margin-bottom: 2px; }
+            .mb-1 { margin-bottom: 3px; }
+            .mb-1\\.5 { margin-bottom: 4px; }
+            .mb-2 { margin-bottom: 6px; }
+            .mb-3 { margin-bottom: 8px; }
+            .mt-1 { margin-top: 3px; }
+            .mt-2 { margin-top: 6px; }
+            .my-1 { margin-top: 3px; margin-bottom: 3px; }
+            .my-2 { margin-top: 6px; margin-bottom: 6px; }
+            .mx-auto { margin-left: auto; margin-right: auto; }
+            .space-y-0\\.5 > * + * { margin-top: 2px; }
+            .space-y-1 > * + * { margin-top: 3px; }
+            
+            .w-8 { width: 24px; }
+            .w-10 { width: 32px; }
+            .w-12 { width: 40px; }
+            .w-16 { width: 52px; }
+            .w-24 { width: 75px; }
+            .w-28 { width: 90px; }
+            .w-full { width: 100% !important; max-width: 100% !important; }
+            .max-w-\\[280px\\] { max-width: 100% !important; }
+            .max-w-\\[300px\\] { max-width: 100% !important; }
+            .w-\\[20\\%\\] { width: 18%; }
+            .w-\\[30\\%\\] { width: 32%; }
+            .w-\\[40\\%\\] { width: 40%; }
+            .h-24 { height: 80px; }
+            .h-28 { height: 90px; }
+            .flex-1 { flex: 1 1 0%; }
+            
+            .text-\\[8px\\] { font-size: 8px !important; line-height: 10px !important; }
+            .text-\\[9px\\] { font-size: 8.5px !important; line-height: 11px !important; }
+            .text-\\[10px\\] { font-size: 9.5px !important; line-height: 12px !important; }
+            .text-\\[11px\\] { font-size: 10px !important; line-height: 13px !important; }
+            .text-\\[12px\\] { font-size: 11px !important; line-height: 14px !important; }
+            .text-\\[13px\\] { font-size: 11.5px !important; line-height: 15px !important; }
+            .text-\\[15px\\] { font-size: 13px !important; line-height: 16px !important; }
+            .text-\\[16px\\] { font-size: 14px !important; line-height: 18px !important; }
+            .font-bold { font-weight: 800 !important; }
+            .font-semibold { font-weight: 700 !important; }
+            .font-medium { font-weight: 600 !important; }
+            .font-normal { font-weight: 400 !important; }
+            .font-mono { font-family: 'Courier New', Courier, monospace !important; }
+            .uppercase { text-transform: uppercase; }
+            .tracking-widest { letter-spacing: 0.05em; }
+            .leading-tight { line-height: 1.2; }
+            .break-all { word-break: break-all; }
+            
+            .border { border: 1px solid #000 !important; }
+            .border-t { border-top: 1px dashed #000 !important; }
+            .border-b { border-bottom: 1px dashed #000 !important; }
+            .border-dashed { border-style: dashed !important; }
+            .border-black { border-color: #000 !important; }
+            .rounded-sm { border-radius: 2px; }
+            .bg-white { background-color: #fff; }
+            
+            table { width: 100% !important; table-layout: fixed; }
+            .border-collapse { border-collapse: collapse; }
+            th, td { word-wrap: break-word; overflow: hidden; }
+            
+            svg { max-width: 100px !important; max-height: 100px !important; height: auto !important; }
+            
+            .text-gray-700, .bg-gray-100, .border-gray-300 { 
+              color: #000000 !important; 
+              border-color: #000000 !important; 
+            }
+          </style>
+        </head>
+        <body>
+          <div style="width: 72mm; max-width: 72mm; box-sizing: border-box; margin: 0; padding: 2px 0;">
+            ${content.innerHTML}
+          </div>
+        </body>
+      </html>
+    `;
+
+    // @ts-ignore
+    if (window.electronAPI) {
+      const printerCaixa = localStorage.getItem('pdv_printer_caixa');
+      try {
+        // @ts-ignore
+        await window.electronAPI.printHtml({ 
+          html: htmlContent, 
+          printer: printerCaixa || undefined,
+          silent: true 
+        });
+        toast.success("Cupom impresso com sucesso!");
+        return;
+      } catch (e: any) {
+        toast.error("Erro ao imprimir: " + e.message);
+      }
+    }
+
+    // Fallback para Web
+    const printWindow = window.open("", "_blank", "width=400,height=700");
+    if (!printWindow) return;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
+  };
+
+  const handleShareWhatsApp = () => {
+    const shortId = ticket.saleId?.slice(-4) || "0000";
+    const itemsText = ticket.items.map(i => `• ${i.quantity}x ${i.product.name} (R$ ${(i.quantity * i.unitPrice).toFixed(2).replace('.', ',')})`).join('\n');
+    const msg = `*COMPROVANTE DE COMPRA - ${ticket.storeName}*\n\n` +
+      `🎫 Senha: *#${String(ticket.senha).padStart(3, '0')}* | Venda: *#${shortId}*\n` +
+      `📅 Data: ${ticket.createdAt.toLocaleString('pt-BR')}\n` +
+      `👤 Cliente: ${ticket.customerName || 'Consumidor Final'}\n\n` +
+      `*ITENS:*\n${itemsText}\n\n` +
+      `💰 *TOTAL: R$ ${ticket.total.toFixed(2).replace('.', ',')}*\n` +
+      `Forma de Pagamento: ${paymentLabel[ticket.paymentMethod] || ticket.paymentMethod}\n` +
+      (ticket.changeAmount && ticket.changeAmount > 0 ? `Troco: R$ ${ticket.changeAmount.toFixed(2).replace('.', ',')}\n` : '') +
+      `\nAgradecemos a sua preferência! Volte sempre! ✨`;
+
+    const phone = ticket.customerPhone?.replace(/\D/g, '') || "";
+    if (phone && phone.length >= 10) {
+      window.open(`https://wa.me/55${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+    } else {
+      const inputPhone = window.prompt("Digite o número do WhatsApp do cliente com DDD (ex: 11999998888):");
+      if (inputPhone) {
+        const clean = inputPhone.replace(/\D/g, '');
+        if (clean.length >= 10) {
+          window.open(`https://wa.me/55${clean}?text=${encodeURIComponent(msg)}`, '_blank');
+        } else {
+          toast.error("Número de WhatsApp inválido.");
+        }
+      }
+    }
+  };
+
+  if (!ticket) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-emerald-600">
+            <CheckCircle2 className="h-5 w-5" />
+            Venda Finalizada!
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* Cupom Preview */}
+        <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
+          <Cupom ticket={ticket} printRef={printRef} />
+        </div>
+
+        {/* Ações */}
+        <div className="flex gap-2 pt-1 flex-wrap">
+          {localStorage.getItem("pdv_enable_fiscal") === "true" && (
+            <Button onClick={handleEmitNFe} disabled={emittingNfe} className="flex-1 min-w-[120px] gap-2 bg-blue-600 hover:bg-blue-700 text-white">
+              {emittingNfe ? "Gerando NF-e..." : "Emitir NF-e (Asaas)"}
+            </Button>
+          )}
+          <Button onClick={handlePrint} className="flex-1 min-w-[120px] gap-2 bg-gray-900 hover:bg-gray-700">
+            <Printer className="h-4 w-4" />
+            Imprimir Cupom
+          </Button>
+          <Button onClick={handleShareWhatsApp} variant="outline" className="flex-1 min-w-[120px] gap-1.5 border-emerald-500 text-emerald-700 hover:bg-emerald-50">
+            <MessageSquare className="h-4 w-4 text-emerald-600" />
+            WhatsApp
+          </Button>
+          <Button onClick={onClose} variant="outline" className="flex-1 min-w-[120px]">
+            Nova Venda
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+
+// ─── PDV Principal ────────────────────────────────────────────────────────────
+export default function PDV({ isDeliveryMode = false }: { isDeliveryMode?: boolean }) {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [discount, setDiscount] = useState(0);
+  const [discountType, setDiscountType] = useState<"fixed" | "percent">("fixed");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [receivedCashInput, setReceivedCashInput] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const cartContentRef = useRef<HTMLDivElement>(null);
+  const customerSectionRef = useRef<HTMLDivElement>(null);
+  const customerNameInputRef = useRef<HTMLInputElement>(null);
+  const customerDocumentInputRef = useRef<HTMLInputElement>(null);
+  const [cupomOpen, setCupomOpen] = useState(false);
+  const [lastTicket, setLastTicket] = useState<SaleTicket | null>(null);
+  const [saleCounter, setSaleCounter] = useState(1);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [pendingSaleId, setPendingSaleId] = useState<string | null>(null);
+
+  // ── Vendedoras ───────────────────────────────────────────────────────────────
+  const sellers: { name: string; commission: number }[] = JSON.parse(
+    localStorage.getItem("pdv_sellers") || "[]"
+  );
+  const [selectedSeller, setSelectedSeller] = useState<{ name: string; commission: number } | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerId, setCustomerId] = useState("");
+  const [customerDocument, setCustomerDocument] = useState("");
+  const [customerSearchModalOpen, setCustomerSearchModalOpen] = useState(false);
+  const [customerFormModalOpen, setCustomerFormModalOpen] = useState(false);
+  const [promissoriaPlan, setPromissoriaPlan] = useState<PromissoriaPlanType>("30");
+  const [deliveryType, setDeliveryType] = useState<"local" | "retirada" | "entrega">(isDeliveryMode ? "entrega" : "local");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryNotes, setDeliveryNotes] = useState("");
+
+  // Modal de Produto (Peso e Adicionais)
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [productModalOpen, setProductModalOpen] = useState(false);
+  const [modalQty, setModalQty] = useState<number | string>(1);
+  const [modalPrice, setModalPrice] = useState<number | string>("");
+  const [selectedAdds, setSelectedAdds] = useState<any[]>([]);
+
+  // ── Histórico de Vendas & Cancelamento ──────────────────────────────────────
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [cancelingSaleId, setCancelingSaleId] = useState<string | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState("");
+  const [selectedSaleToCancel, setSelectedSaleToCancel] = useState<any | null>(null);
+
+  // ── Controle de Caixa (Abertura, Movimentação, Fechamento) ───────────────────
+  const [currentCaixa, setCurrentCaixa] = useState<CaixaSession | null>(null);
+  const [openCaixaModal, setOpenCaixaModal] = useState(false);
+  const [openCaixaOperator, setOpenCaixaOperator] = useState("");
+  const [openCaixaInitialAmount, setOpenCaixaInitialAmount] = useState<string>("0");
+  
+  const [movModalOpen, setMovModalOpen] = useState(false);
+  const [movType, setMovType] = useState<"suprimento" | "sangria">("suprimento");
+  const [movAmount, setMovAmount] = useState<string>("");
+  const [movReason, setMovReason] = useState<string>("");
+  const [movPassword, setMovPassword] = useState<string>("");
+
+  const [closeCaixaModalOpen, setCloseCaixaModalOpen] = useState(false);
+  const [closeActualCash, setCloseActualCash] = useState<string>("");
+  const [closeNotes, setCloseNotes] = useState<string>("");
+  const [closePassword, setClosePassword] = useState<string>("");
+
+  useEffect(() => { searchRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const duplicateData = localStorage.getItem("pdv_duplicate_cart");
+    if (duplicateData) {
+      try {
+        const { items, customerName, customerPhone, customerId } = JSON.parse(duplicateData);
+        if (items && items.length > 0) {
+          setCart(items.map((i: any) => ({
+            cartItemId: `dup-${Date.now()}-${Math.random()}`,
+            product: i.product || { id: i.id || "manual", name: i.name, price: i.unit_price || i.price, active: true },
+            unitPrice: i.unit_price || i.price || i.product?.price || 0,
+            quantity: i.quantity || 1,
+            selectedAdditionals: [],
+          })));
+        }
+        if (customerName) setCustomerName(customerName);
+        if (customerPhone) setCustomerPhone(customerPhone);
+        if (customerId) setCustomerId(customerId);
+      } catch (e) {
+        console.error("Error parsing duplicate cart", e);
+      }
+      localStorage.removeItem("pdv_duplicate_cart");
+    }
+  }, []);
+
+  // Profile / store
+  const { data: profile, isLoading: profileLoading } = useQuery({
+    queryKey: ["profile", user?.id],
+    enabled: !!user,
+    retry: 3,
+    retryDelay: 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, store_id, full_name")
+        .eq("auth_user_id", user!.id)
+        .single();
+      if (error) {
+        console.error("[PDV] Erro ao carregar perfil:", error.message);
+        throw error;
+      }
+      return data;
+    },
+  });
+
+  // Usa store_id do perfil ou, em modo offline, usa o próprio user.id
+  const storeId = profile?.store_id ?? user?.id ?? "test-store";
+  // sales.user_id referencia profiles(id) — NUNCA use auth user.id aqui
+  const profileId = profile?.id;
+
+  const isValidUUID = (s?: string) =>
+    !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+
+  // Store info
+  const { data: store } = useQuery({
+    queryKey: ["store", storeId],
+    enabled: !!storeId,
+    queryFn: async () => {
+      const { data, error } = await supabase.from("stores").select("*").eq("id", storeId!).single();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  // Atualiza e carrega o caixa ativo
+  const refreshCaixa = useCallback(() => {
+    const active = getActiveCaixa(storeId || undefined);
+    setCurrentCaixa(active);
+  }, [storeId]);
+
+  useEffect(() => {
+    restoreCaixaFromDexie(storeId || undefined).then((cx) => {
+      if (cx) setCurrentCaixa(cx);
+      else refreshCaixa();
+    });
+    restorePromissoriasFromDexie(storeId || undefined).catch(() => {});
+  }, [storeId, refreshCaixa]);
+
+  // Se não houver caixa aberto, pré-define o nome do operador para a abertura
+  useEffect(() => {
+    if (!currentCaixa && profile?.full_name) {
+      setOpenCaixaOperator(profile.full_name);
+    }
+  }, [currentCaixa, profile]);
+
+  useEffect(() => {
+    if (store && (!store.table_count || Number(store.table_count) <= 0) && deliveryType === "local" && !isDeliveryMode) {
+      setDeliveryType("retirada");
+    }
+  }, [store, deliveryType, isDeliveryMode]);
+
+  // Busca vendas pendentes para as mesas
+  const { data: pendingSales = [], refetch: refetchPending } = useQuery({
+    queryKey: ["sales_pending", storeId],
+    enabled: !!storeId && isValidUUID(storeId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales")
+        .select("id, table_name, total, notes")
+        .eq("store_id", storeId)
+        .eq("status", "pending")
+        .not("table_name", "is", null);
+      if (error) throw error;
+      return data || [];
+    },
+    refetchInterval: 5000
+  });
+
+  // Busca histórico recente de vendas para cancelamento e reimpressão
+  const { data: recentSales = [], refetch: refetchRecentSales, isLoading: loadingSales } = useQuery({
+    queryKey: ["recent_sales_pdv", storeId],
+    enabled: !!storeId && isValidUUID(storeId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales")
+        .select(`
+          id, total, discount, payment_method, status, notes, created_at,
+          sale_items (
+            id, product_id, quantity, unit_price, subtotal
+          )
+        `)
+        .eq("store_id", storeId)
+        .order("created_at", { ascending: false })
+        .limit(40);
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  // Cancelar / Estornar Venda com devolução de estoque
+  const cancelSaleMutation = useMutation({
+    mutationFn: async ({ saleId, reason, items }: { saleId: string; reason: string; items?: any[] }) => {
+      const formattedReason = reason?.trim() ? `[Cancelado no PDV: ${reason.trim()}]` : "[Cancelado no PDV]";
+
+      // 1. Atualiza o status da venda para cancelled
+      const { error: updateError } = await supabase
+        .from("sales")
+        .update({
+          status: "cancelled",
+          notes: formattedReason,
+        })
+        .eq("id", saleId);
+
+      if (updateError) throw updateError;
+
+      // 2. Se a venda possuía itens, devolve a quantidade ao estoque dos produtos
+      if (items && items.length > 0) {
+        for (const item of items) {
+          if (item.product_id && isValidUUID(item.product_id)) {
+            // Busca o produto atual para somar o estoque
+            const { data: prod } = await supabase
+              .from("products")
+              .select("stock_quantity")
+              .eq("id", item.product_id)
+              .single();
+
+            if (prod && prod.stock_quantity !== null) {
+              const restoredStock = Number(prod.stock_quantity) + Number(item.quantity);
+              await supabase
+                .from("products")
+                .update({ stock_quantity: restoredStock })
+                .eq("id", item.product_id);
+            }
+          }
+        }
+      }
+    },
+    onSuccess: () => {
+      toast.success("Venda cancelada e estoque estornado com sucesso!");
+      setSelectedSaleToCancel(null);
+      setCancelReasonInput("");
+      refetchRecentSales();
+      queryClient.invalidateQueries({ queryKey: ["products", storeId] });
+      queryClient.invalidateQueries({ queryKey: ["reports"] });
+    },
+    onError: (err: any) => {
+      toast.error("Erro ao cancelar venda: " + err.message);
+    }
+  });
+
+  // Products — lê do Dexie (banco local) quando offline, faz sync quando online
+  const { data: products = [] } = useQuery({
+    queryKey: ["products", storeId],
+    enabled: !!storeId,
+    queryFn: async () => {
+      // 1. Tenta buscar do Supabase (online)
+      if (navigator.onLine) {
+        try {
+          const { data, error } = await supabase
+            .from("products")
+            .select("*")
+            .eq("store_id", storeId!)
+            .eq("active", true)
+            .order("name");
+          if (error) throw error;
+          // Salva no banco local para usar offline depois
+          const localData = (data as Product[]).map(p => ({ ...p, _sync_status: 'synced' as const }));
+          await db.products.bulkPut(localData);
+          return data as Product[];
+        } catch (err) {
+          console.warn("[PDV] Supabase indisponível, usando banco local.", err);
+        }
+      }
+      // 2. Offline: lê do Dexie
+      const localProducts = await db.products
+        .where("store_id").equals(storeId!)
+        .toArray();
+      if (localProducts.length > 0) {
+        toast.info("📦 Usando produtos do banco local (modo offline)");
+        return localProducts.filter(p => (p as any).active !== false) as unknown as Product[];
+      }
+      // 3. Último recurso: localStorage
+      try {
+        const list: Product[] = JSON.parse(
+          localStorage.getItem(`products_offline_${storeId}`) || "[]"
+        );
+        return list.filter(p => p.active);
+      } catch { return []; }
+    },
+  });
+
+
+  // Filtered products
+  const filtered = useMemo(() => {
+    const activeMenu = (store as any)?.active_menu_type || 'both';
+    
+    const menuFiltered = (products || []).filter(p => {
+      if (!p || !p.name) return false;
+      if (activeMenu === 'both') return true;
+      const prodMenu = (p as any).menu_type || 'both';
+      return prodMenu === 'both' || prodMenu === activeMenu;
+    });
+
+    if (!search.trim()) return menuFiltered;
+    
+    const q = search.toLowerCase();
+    return menuFiltered.filter(
+      (p) =>
+        p && p.name && (
+          p.name.toLowerCase().includes(q) ||
+          p.barcode?.toLowerCase().includes(q) ||
+          p.category?.toLowerCase().includes(q)
+        )
+    );
+  }, [products, search, store]);
+
+  // Additionals for modal
+  const { data: productAdditionals = [] } = useQuery({
+    queryKey: ["product_additionals_pdv", selectedProduct?.id],
+    enabled: !!selectedProduct && !!(selectedProduct as any).has_additionals,
+    queryFn: async () => {
+      // Se for produto offline e tiver os dados salvos nele
+      if ((selectedProduct as any).additionals_data) {
+        return (selectedProduct as any).additionals_data;
+      }
+      // Se for um ID local, não tenta buscar no banco
+      if (selectedProduct!.id.startsWith("local-")) {
+        return [];
+      }
+      const { data } = await (supabase as any)
+        .from("product_additionals")
+        .select("*")
+        .eq("product_id", selectedProduct!.id)
+        .eq("active", true)
+        .order("created_at");
+      return (data || []) as any[];
+    }
+  });
+
+  // Cart helpers
+  const handleProductClick = (p: Product) => {
+    const hasAdds = (p as any).has_additionals;
+    const isWeight = (p as any).unit === "KG" || (p as any).unit === "G" || (p as any).unit === "L";
+    
+    if (hasAdds || isWeight) {
+      setSelectedProduct(p);
+      setModalQty(isWeight ? "" : 1);
+      setModalPrice(isWeight ? "" : p.price);
+      setSelectedAdds([]);
+      setProductModalOpen(true);
+    } else {
+      addToCart(p, 1, [], p.price);
+    }
+  };
+
+  const addToCart = (product: Product, quantity: number, adds: any[], unitPrice: number) => {
+    if (quantity <= 0) return;
+    
+    setCart((prev) => {
+      // Verifica se é o mesmo produto com os MESMOS adicionais para mesclar
+      const addsStr = JSON.stringify(adds);
+      const existing = prev.find((i) => i.product.id === product.id && JSON.stringify(i.selectedAdditionals) === addsStr);
+      
+      if (existing) {
+        if (existing.quantity + quantity > product.stock_display) {
+          toast.error("Estoque insuficiente em exposição");
+          return prev;
+        }
+        return prev.map((i) =>
+          i.cartItemId === existing.cartItemId ? { ...i, quantity: i.quantity + quantity } : i
+        );
+      }
+      
+      if (quantity > product.stock_display) {
+        toast.error("Produto sem estoque suficiente em exposição");
+        return prev;
+      }
+      
+      return [...prev, { cartItemId: Math.random().toString(36).substring(7), product, quantity, selectedAdditionals: adds, unitPrice }];
+    });
+    sounds.playBeep();
+    setSearch("");
+    searchRef.current?.focus();
+    setProductModalOpen(false);
+  };
+
+  const updateQty = (cartItemId: string, delta: number) => {
+    setCart((prev) =>
+      prev
+        .map((i) => {
+          if (i.cartItemId !== cartItemId) return i;
+          const newQty = i.quantity + delta;
+          if (newQty > i.product.stock_display) {
+            toast.error("Estoque insuficiente");
+            return i;
+          }
+          return { ...i, quantity: newQty };
+        })
+        .filter((i) => i.quantity > 0)
+    );
+  };
+
+  const removeFromCart = (cartItemId: string) => setCart((prev) => prev.filter((i) => i.cartItemId !== cartItemId));
+
+  const updateItemPrice = (cartItemId: string, newPrice: number) => {
+    setCart((prev) => prev.map((i) => (i.cartItemId === cartItemId ? { ...i, unitPrice: newPrice } : i)));
+  };
+
+  const clearCart = () => { setCart([]); setDiscount(0); };
+
+  // Totals
+  const subtotal = cart.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  const discountValue = discountType === "percent" ? subtotal * (discount / 100) : discount;
+  const total = Math.max(0, subtotal - discountValue);
+  const receivedCashAmount = parseFloat(receivedCashInput) || 0;
+  const changeAmount = receivedCashAmount > total ? receivedCashAmount - total : 0;
+
+  // Finalize sale
+  const saleMutation = useMutation({
+    mutationFn: async (opts?: { pendingOnly?: boolean }) => {
+      const isPending = opts?.pendingOnly === true;
+      if (cart.length === 0) throw new Error("Carrinho vazio");
+
+      // Validação de Caixa Aberto
+      const activeCx = getActiveCaixa(storeId || undefined);
+      if (!activeCx) {
+        setOpenCaixaModal(true);
+        throw new Error("O Caixa está FECHADO. É obrigatório abrir o caixa para realizar vendas.");
+      }
+
+      if (sellers.length > 0 && !selectedSeller) {
+        throw new Error("Por favor, selecione o vendedor responsável pela venda.");
+      }
+      if (paymentMethod === "promissoria" && !customerName.trim() && !customerId) {
+        throw new Error("Para vender na Promissória/Crediário, é obrigatório informar ou buscar o cliente.");
+      }
+      if (paymentMethod === "promissoria" && promissoriaCfg.requireDocument && !customerDocument.trim()) {
+        throw new Error("É obrigatório informar o CPF/Documento do cliente para venda na Promissória.");
+      }
+      if (deliveryType === "entrega" && !deliveryAddress.trim()) throw new Error("Informe o endereço de entrega");
+      if (isDeliveryMode && !customerName.trim() && !customerId) {
+        throw new Error("O nome do cliente é obrigatório para pedidos de Delivery/WhatsApp.");
+      }
+
+      let saleId: string;
+      const statusToSave = isPending ? "pending" : "completed";
+      const notesToSave = isPending ? JSON.stringify(cart) : null;
+
+      const saveOffline = async () => {
+        if (isPending) throw new Error("Não é possível salvar mesa no modo offline.");
+
+        const offlineId = crypto.randomUUID ? crypto.randomUUID() : `offline-${Date.now()}`;
+        const now = new Date().toISOString();
+
+        // Salva a venda no banco local
+        await db.orders.add({
+          id: offlineId,
+          store_id: storeId,
+          total,
+          status: 'completed',
+          origin: 'pdv',
+          payment_method: paymentMethod,
+          discount: discountValue,
+          discount_type: discountType,
+          customer_name: customerName.trim() || 'Consumidor Final',
+          table_name: selectedTable ?? undefined,
+          created_at: now,
+          _sync_status: 'pending_insert'
+        });
+
+        // Salva os itens da venda no banco local
+        const offlineItems = cart.map(i => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : `offline-item-${Date.now()}-${Math.random()}`,
+          sale_id: offlineId,
+          product_id: isValidUUID(i.product.id) ? i.product.id : undefined,
+          quantity: i.quantity,
+          unit_price: i.unitPrice,
+          subtotal: i.unitPrice * i.quantity,
+          _sync_status: 'pending_insert' as const
+        }));
+        await db.order_items.bulkAdd(offlineItems);
+
+        // Abate o estoque local no Dexie imediatamente para evitar vender produto zerado offline
+        for (const i of cart) {
+          if (i.product?.id) {
+            try {
+              const currentProd = await db.products.get(i.product.id);
+              if (currentProd && typeof currentProd.stock_quantity === 'number') {
+                await db.products.update(i.product.id, {
+                  stock_quantity: Math.max(0, currentProd.stock_quantity - i.quantity)
+                });
+              }
+            } catch (e) {
+              // Non-blocking
+            }
+          }
+        }
+
+        toast.info("📶 Conexão falhou — Venda salva localmente! Será sincronizada quando a conexão voltar.");
+        return { id: offlineId, trackingUrl: undefined };
+      };
+
+      // ─── OFFLINE-FIRST: salva no Dexie se não tiver internet ────────────────
+      if (!navigator.onLine) {
+        return await saveOffline();
+      }
+
+      // ─── ONLINE: salva normalmente no Supabase ────────────────────────────
+      try {
+        if (pendingSaleId) {
+          const { error: updateError } = await supabase
+            .from("sales")
+            .update({
+              total,
+              discount: discountValue,
+              discount_type: discountType,
+              payment_method: paymentMethod,
+              status: statusToSave as any,
+              notes: notesToSave
+            })
+            .eq("id", pendingSaleId);
+          if (updateError) throw updateError;
+          saleId = pendingSaleId;
+        } else {
+          const { data: sale, error: saleError } = await supabase
+            .from("sales")
+            .insert({
+              store_id: storeId,
+              user_id: profileId,
+              table_name: selectedTable,
+              total,
+              discount: discountValue,
+              discount_type: discountType,
+              payment_method: paymentMethod,
+              status: statusToSave as any,
+              notes: notesToSave
+            })
+            .select("id")
+            .single();
+          if (saleError) throw saleError;
+          saleId = sale.id;
+        }
+
+        if (!isPending) {
+          const items = cart.map((i) => {
+            const itemSubtotal = i.unitPrice * i.quantity;
+            return {
+              sale_id: saleId,
+              product_id: isValidUUID(i.product.id) ? i.product.id : null,
+              quantity: i.quantity,
+              unit_price: i.unitPrice,
+              subtotal: itemSubtotal,
+            };
+          });
+          const { error: itemsError } = await supabase.from("sale_items").insert(items);
+          if (itemsError) throw itemsError;
+        }
+
+        let trackingUrl: string | undefined;
+        if (localStorage.getItem("pdv_tracking_qr") === "true" && isValidUUID(storeId)) {
+          const { data: orderData, error: orderError } = await supabase
+            .from("orders")
+            .insert({
+              store_id: storeId,
+              customer_id: customerId || null,
+              customer_name: customerName.trim() || "Cliente PDV",
+              customer_phone: customerPhone.trim() || null,
+              status: "preparing",
+              total,
+              payment_method: paymentMethod,
+              origin: "pdv",
+              delivery_type: deliveryType,
+              delivery_address: deliveryType === "entrega" ? deliveryAddress.trim() : null,
+            })
+            .select("id")
+            .single();
+          if (!orderError && orderData) {
+            trackingUrl = `${window.location.origin}/pedido/${orderData.id}`;
+            const orderItems = cart.map((i) => ({
+               order_id: orderData.id,
+               product_id: isValidUUID(i.product.id) ? i.product.id : null,
+               product_name: i.product.name,
+               unit_price: i.unitPrice,
+               quantity: i.quantity,
+               subtotal: i.unitPrice * i.quantity,
+               additionals: i.selectedAdditionals ?? []
+            }));
+            await supabase.from("order_items").insert(orderItems);
+          } else if (orderError) {
+            console.error("Erro ao gerar link de rastreio:", orderError);
+            toast.error("Erro ao gerar link de rastreio: " + orderError.message);
+          }
+        }
+
+        return { id: saleId, trackingUrl };
+      } catch (err: any) {
+        if (err.message === "Failed to fetch" || err.message?.includes("fetch")) {
+          console.warn("Falha de rede ao tentar salvar online, recorrendo ao offline:", err);
+          return await saveOffline();
+        }
+        throw err;
+      }
+    },
+    onSuccess: (data, variables) => {
+      const isPending = variables?.pendingOnly === true;
+      if (isPending) {
+         toast.success("Mesa salva com sucesso!");
+         setCart([]);
+         setSelectedTable(null);
+         setPendingSaleId(null);
+         refetchPending();
+         return;
+      }
+
+      // Acumula compra no programa de fidelidade se houver cliente identificado por Nome, Telefone ou ID
+      const loyaltyCfg = getLoyaltyPromoConfig(storeId);
+      if (loyaltyCfg.enabled && (customerId || customerPhone.trim() || customerName.trim())) {
+        const result = addCustomerPurchaseStamp(
+          customerId || undefined, 
+          customerPhone.trim() || undefined, 
+          total, 
+          loyaltyCfg,
+          customerName.trim() || undefined
+        );
+        if (result.wonReward) {
+          toast.success(`🎉 Cliente completou a meta de fidelidade! Ganhou: ${loyaltyCfg.rewardDescription}`);
+        }
+      }
+
+      // Registra a venda no caixa ativo (Dinheiro, Pix, Cartão ou Promissória)
+      recordSaleInCaixa(storeId || undefined, paymentMethod, total);
+      refreshCaixa();
+
+      sounds.playSuccess();
+      toast.success("Venda finalizada com sucesso!");
+      setCart([]);
+      setDiscount(0);
+      setCustomerName("");
+      setCustomerPhone("");
+      setCustomerId("");
+      setDeliveryType("local");
+      setDeliveryAddress("");
+      setDeliveryNotes("");
+      setSaleCounter(c => c + 1);
+      setSelectedTable(null);
+      setPendingSaleId(null);
+      setReceivedCashInput("");
+      refetchPending();
+      refetchRecentSales();
+      queryClient.invalidateQueries({ queryKey: ["store-customers"] });
+      
+      let generatedInstallments: PromissoriaInstallment[] | undefined;
+      if (paymentMethod === "promissoria") {
+        generatedInstallments = calculateInstallments(total, promissoriaPlan);
+        createPromissoria({
+          storeId: storeId || undefined,
+          saleId: data?.id,
+          customerId: customerId || undefined,
+          customerName: customerName.trim() || "Cliente",
+          customerPhone: customerPhone.trim() || undefined,
+          customerDocument: customerDocument.trim() || undefined,
+          totalAmount: total,
+          plan: promissoriaPlan,
+          installmentsCount: generatedInstallments.length,
+          installments: generatedInstallments,
+          notes: `Venda ${data?.id ? data.id.slice(-4) : 'PDV'} no plano ${promissoriaPlan}`,
+        });
+        toast.info("📜 Nota Promissória registrada no contas a receber!");
+      }
+
+      const newTicket: SaleTicket = {
+        saleId: data?.id || `off-${Date.now()}`,
+        senha: saleCounter,
+        items: [...cart],
+        subtotal,
+        discountValue,
+        total,
+        paymentMethod,
+        cashierName: profile?.full_name ?? user?.email ?? "Operador",
+        storeName: store?.name ?? "Minha Loja",
+        storeCnpj: (store as any)?.cnpj ?? "",
+        storeAddress: (store as any)?.address ?? "",
+        storeCity: (store as any)?.city ?? "",
+        customerName,
+        customerPhone,
+        customerDocument,
+        deliveryAddress,
+        deliveryNotes,
+        createdAt: new Date(),
+        trackingUrl: data?.trackingUrl,
+        sellerName: selectedSeller?.name,
+        sellerCommission: selectedSeller?.commission,
+        promissoriaPlan: paymentMethod === "promissoria" ? promissoriaPlan : undefined,
+        promissoriaInstallments: generatedInstallments,
+        paidAmount: paymentMethod === "cash" && receivedCashAmount > 0 ? receivedCashAmount : total,
+        changeAmount: paymentMethod === "cash" && changeAmount > 0 ? changeAmount : 0,
+      };
+
+      setCustomerDocument("");
+
+      // Salva registro de comissão no localStorage para relatório
+      if (selectedSeller && data?.id) {
+        const commissionsKey = "pdv_commissions";
+        const existing = JSON.parse(localStorage.getItem(commissionsKey) || "[]");
+        existing.push({
+          saleId: data.id,
+          sellerName: selectedSeller.name,
+          commission: selectedSeller.commission,
+          total,
+          commissionValue: (total * selectedSeller.commission) / 100,
+          date: new Date().toISOString(),
+        });
+        localStorage.setItem(commissionsKey, JSON.stringify(existing));
+      }
+      setSelectedSeller(null);
+      setLastTicket(newTicket);
+      setCupomOpen(true);
+      
+      // -- Impressão automática na cozinha --
+      const kitchenPrinter = localStorage.getItem("pdv_printer_cozinha");
+      if (kitchenPrinter) {
+        // Mapeia os dados para o formato que a função de cozinha espera
+        const kitchenOrder = {
+          id: data.id,
+          customer_name: customerName.trim() || "Cliente PDV",
+          delivery_type: deliveryType,
+          delivery_address: deliveryAddress,
+          created_at: new Date().toISOString()
+        };
+        const kitchenItems = cart.map(i => ({
+          quantity: i.quantity,
+          product_name: i.product.name,
+          additionals: i.selectedAdditionals ?? []
+        }));
+        
+        const html = buildKitchenReceiptHtml(kitchenOrder, kitchenItems, store?.name ?? "Minha Loja");
+        printToKitchen(html).then(ok => {
+          if (ok) toast.success("🖨️ Comanda enviada para a cozinha!");
+        });
+      }
+
+      // Limpa o modo de teste para a próxima venda (se estava ativado)
+      if (localStorage.getItem("pdv_test_mode_once") === "true") {
+        localStorage.removeItem("pdv_test_mode_once");
+        toast.info("Modo de teste desativado. Próxima venda emitirá nota.");
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (e) => {
+      sounds.playError();
+      toast.error("Erro na venda: " + e.message);
+    },
+  });
+
+  // ── Atalhos de Teclado de Balcão (F2, F3, F4, F6, F9, Esc) ───────────────────
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F2") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        setCustomerSearchModalOpen(true);
+      } else if (e.key === "F4") {
+        e.preventDefault();
+        if (cart.length > 0 && !saleMutation.isPending) {
+          saleMutation.mutate({});
+        } else if (cart.length === 0) {
+          toast.info("Adicione itens ao carrinho antes de finalizar (F4).");
+        }
+      } else if (e.key === "F6") {
+        e.preventDefault();
+        setMovType("sangria");
+        setMovAmount("");
+        setMovReason("");
+        setMovModalOpen(true);
+      } else if (e.key === "F9") {
+        e.preventDefault();
+        if (lastTicket) {
+          setCupomOpen(true);
+        } else {
+          toast.info("Nenhum cupom recente para reimprimir (F9).");
+        }
+      } else if (e.key === "Escape") {
+        if (search) {
+          setSearch("");
+        } else {
+          setCustomerSearchModalOpen(false);
+          setCustomerFormModalOpen(false);
+          setEditModalOpen(false);
+          setProductModalOpen(false);
+          setHistoryModalOpen(false);
+          setMovModalOpen(false);
+          setOpenCaixaModal(false);
+          setCloseCaixaModalOpen(false);
+          setCupomOpen(false);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [cart, saleMutation, lastTicket, search]);
+
+  // ── Busca e Leitura Automática de Código de Barras (Enter) ────────────────────
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const query = search.trim().toLowerCase();
+      if (!query) return;
+
+      // 1. Procura por código de barras exato
+      const exactBarcode = products.find(p => p.barcode && p.barcode.trim().toLowerCase() === query);
+      if (exactBarcode) {
+        handleProductClick(exactBarcode);
+        setSearch("");
+        sounds.playBeep();
+        toast.success(`+1 ${exactBarcode.name}`, { duration: 1500 });
+        return;
+      }
+
+      // 2. Procura por nome exato
+      const exactName = products.find(p => p.name && p.name.trim().toLowerCase() === query);
+      if (exactName) {
+        handleProductClick(exactName);
+        setSearch("");
+        sounds.playBeep();
+        toast.success(`+1 ${exactName.name}`, { duration: 1500 });
+        return;
+      }
+
+      // 3. Se houver apenas 1 produto no filtro atual, adiciona direto
+      if (filtered.length === 1) {
+        handleProductClick(filtered[0]);
+        setSearch("");
+        sounds.playBeep();
+        toast.success(`+1 ${filtered[0].name}`, { duration: 1500 });
+        return;
+      }
+
+      if (filtered.length === 0) {
+        sounds.playError();
+        toast.error("Nenhum produto encontrado com o código digitado.");
+      }
+    }
+  };
+
+  const formatCurrency = (v: number) =>
+    new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+
+  const promissoriaCfg = getPromissoriaConfig(storeId);
+
+  const paymentMethods = [
+    { value: "cash", label: "Dinheiro", icon: Banknote },
+    { value: "credit", label: "Crédito", icon: CreditCard },
+    { value: "debit", label: "Débito", icon: CreditCard },
+    { value: "pix", label: "PIX", icon: QrCode },
+    ...(promissoriaCfg.enabled ? [{ value: "promissoria", label: "Promissória", icon: FileText }] : []),
+  ];
+
+  const handleSelectPaymentMethod = (method: string) => {
+    setPaymentMethod(method);
+    if (method === "promissoria") {
+      setTimeout(() => {
+        if (customerSectionRef.current) {
+          customerSectionRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else if (cartContentRef.current) {
+          cartContentRef.current.scrollTo({
+            top: cartContentRef.current.scrollHeight,
+            behavior: "smooth"
+          });
+        }
+        setTimeout(() => {
+          if (!customerName.trim() && customerNameInputRef.current) {
+            customerNameInputRef.current.focus({ preventScroll: true });
+          } else if (promissoriaCfg.requireDocument && !customerDocument.trim() && customerDocumentInputRef.current) {
+            customerDocumentInputRef.current.focus({ preventScroll: true });
+          }
+        }, 150);
+      }, 100);
+    }
+  };
+
+  const tablesEnabled = !isDeliveryMode && ((store?.table_count || 0) > 0 || store?.has_counters);
+
+  if (tablesEnabled && !selectedTable) {
+    const renderBoxes = (prefix: string, count: number) => {
+      return Array.from({ length: count }).map((_, i) => {
+        const name = `${prefix} ${i + 1}`;
+        const pendingSale = pendingSales.find(s => s.table_name === name);
+        const isOccupied = !!pendingSale; 
+        return (
+          <Button 
+            key={name}
+            variant={isOccupied ? "default" : "outline"}
+            className={`h-32 text-xl font-bold flex flex-col gap-2 ${isOccupied ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-800 border-gray-300'}`}
+            onClick={() => {
+              setSelectedTable(name);
+              if (pendingSale) {
+                setPendingSaleId(pendingSale.id);
+                try {
+                  if (pendingSale.notes) {
+                    const loadedCart = JSON.parse(pendingSale.notes);
+                    setCart(loadedCart);
+                  }
+                } catch (e) {
+                  console.error("Erro ao carregar carrinho salvo", e);
+                  setCart([]);
+                }
+              } else {
+                setPendingSaleId(null);
+                setCart([]);
+              }
+            }}
+          >
+            <span>{name}</span>
+            {isOccupied && <span className="text-sm font-normal bg-red-800 px-2 py-1 rounded">R$ {pendingSale.total?.toFixed(2)}</span>}
+          </Button>
+        );
+      });
+    };
+
+    return (
+      <div className="space-y-6 max-w-7xl mx-auto pb-12">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold font-['Space_Grotesk']">Visão Geral do Salão</h2>
+        </div>
+        
+        {(store?.table_count || 0) > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold border-b pb-2 text-gray-700">Mesas Disponíveis</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
+              {renderBoxes("Mesa", store?.table_count || 0)}
+            </div>
+          </div>
+        )}
+
+        {store?.has_counters && (store?.counter_count || 0) > 0 && (
+          <div className="space-y-4 mt-8">
+            <h3 className="text-lg font-semibold border-b pb-2 text-gray-700">Balcões</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
+              {renderBoxes("Balcão", store?.counter_count || 0)}
+            </div>
+          </div>
+        )}
+
+        <CupomModal
+          ticket={lastTicket}
+          open={cupomOpen}
+          onClose={() => setCupomOpen(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {selectedTable && (
+        <div className="mb-4 flex items-center justify-between bg-blue-50 border border-blue-200 p-3 rounded-lg text-blue-800 shadow-sm">
+          <span className="font-bold text-lg flex items-center gap-2">
+            <UtensilsCrossed className="w-5 h-5" />
+            Atendendo: {selectedTable}
+          </span>
+          <Button variant="outline" size="sm" onClick={() => {
+            setSelectedTable(null);
+            setCart([]);
+          }}>
+            Voltar para Visão do Salão
+          </Button>
+        </div>
+      )}
+      {/* ── BARRA DE CONTROLE DO CAIXA DO PDV ─────────────────────────── */}
+      <div className={`p-3 rounded-xl border flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs transition-colors ${
+        currentCaixa
+          ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
+          : "bg-amber-50/80 border-amber-200 text-amber-950"
+      }`}>
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className={`p-2.5 rounded-lg shrink-0 ${
+            currentCaixa ? "bg-emerald-600 text-white" : "bg-amber-600 text-white"
+          }`}>
+            <Vault className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm">
+                {currentCaixa ? `Caixa Aberto · Operador: ${currentCaixa.openedBy}` : "Caixa Fechado"}
+              </span>
+              <Badge className={`text-[10px] ${
+                currentCaixa ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-amber-600 text-white hover:bg-amber-700"
+              }`}>
+                {currentCaixa ? "EM OPERAÇÃO" : "VENDAS BLOQUEADAS"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {currentCaixa
+                ? `Gaveta (Dinheiro): ${formatCurrency(currentCaixa.expectedCashInDrawer)} · Vendas Turno: ${formatCurrency(currentCaixa.salesSummary.totalSales)}`
+                : "Abra o caixa informando o fundo de troco para iniciar as vendas"}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap justify-end">
+          {currentCaixa ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setMovType("suprimento");
+                  setMovAmount("");
+                  setMovReason("");
+                  setMovModalOpen(true);
+                }}
+                className="bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-50 text-xs font-semibold gap-1 h-8 shadow-2xs"
+                title="Colocar dinheiro/troco na gaveta"
+              >
+                <ArrowDownRight className="h-3.5 w-3.5 text-emerald-600" />
+                + Suprimento
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setMovType("sangria");
+                  setMovAmount("");
+                  setMovReason("");
+                  setMovModalOpen(true);
+                }}
+                className="bg-white border-rose-300 text-rose-800 hover:bg-rose-50 text-xs font-semibold gap-1 h-8 shadow-2xs"
+                title="Retirar dinheiro da gaveta (sangria/despesas)"
+              >
+                <ArrowUpRight className="h-3.5 w-3.5 text-rose-600" />
+                - Sangria
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setCloseActualCash("");
+                  setCloseNotes("");
+                  setCloseCaixaModalOpen(true);
+                }}
+                className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold gap-1 h-8 shadow-sm"
+              >
+                <Lock className="h-3.5 w-3.5 text-amber-400" />
+                Fechar Caixa
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setOpenCaixaInitialAmount("0");
+                setOpenCaixaOperator(profile?.full_name || "Operador");
+                setOpenCaixaModal(true);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 h-9 px-4 shadow-md"
+            >
+              <Unlock className="h-4 w-4" />
+              Abrir Caixa Agora
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className={`flex flex-col lg:flex-row gap-4 ${selectedTable ? 'h-[calc(100vh-12rem)]' : 'h-[calc(100vh-8rem)]'}`}>
+        {/* Left: Product search & grid */}
+        <div className="flex-1 flex flex-col min-w-0 gap-4">
+          <div className="flex gap-2 items-center">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={searchRef}
+                placeholder="Buscar produto ou bipar código de barras (Enter para adicionar)..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                className="pl-10 h-12 text-base font-medium"
+              />
+            </div>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => {
+                refetchRecentSales();
+                setHistoryModalOpen(true);
+              }}
+              className="h-12 px-4 gap-2 border-primary/30 hover:bg-primary/10 text-primary font-semibold shrink-0"
+              title="Ver histórico de vendas do PDV e cancelamento/estorno"
+            >
+              <History className="h-5 w-5" />
+              <span className="hidden sm:inline">Histórico / Cancelar Venda</span>
+            </Button>
+          </div>
+
+          {/* Barra de Atalhos Rápidos para o Operador */}
+          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 text-[11px] text-muted-foreground select-none">
+            <Keyboard className="h-3.5 w-3.5 text-primary shrink-0" />
+            <span className="font-semibold text-foreground/80">Atalhos:</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">F2 Buscar</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">F3 Cliente</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">F4 Finalizar</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">F6 Sangria</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">F9 Reimp. Cupom</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded font-mono font-medium border border-border">Esc Fechar</span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              {filtered.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleProductClick(p)}
+                  className="flex flex-col p-0 rounded-lg border border-border bg-card hover:bg-accent/50 hover:border-primary/30 transition-colors text-left overflow-hidden relative"
+                >
+                  {(p as any).image_url ? (
+                    <div className="w-full h-24 sm:h-28 bg-muted shrink-0 border-b border-border/50">
+                      <img src={(p as any).image_url} alt={p.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="w-full h-24 sm:h-28 bg-muted/30 shrink-0 flex items-center justify-center border-b border-border/50">
+                      <ImageIcon className="h-8 w-8 text-muted-foreground/20" />
+                    </div>
+                  )}
+                  <div className="p-3 flex flex-col flex-1 w-full">
+                    <span className="font-medium text-sm line-clamp-2">{p.name}</span>
+                    <div className="flex gap-2 mt-0.5">
+                      {p.barcode && (
+                        <span className="text-xs text-muted-foreground">{p.barcode}</span>
+                      )}
+                      {(p as any).unit && (p as any).unit !== "UN" && (
+                        <span className="text-[10px] text-blue-600 font-semibold">{(p as any).unit}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between w-full mt-auto pt-2">
+                      <span className="text-sm font-bold text-primary">
+                        {formatCurrency(p.price)}
+                      </span>
+                      <Badge 
+                        variant={p.stock_display <= 0 ? "destructive" : p.stock_display <= 5 ? "outline" : "secondary"} 
+                        className={`text-[10px] sm:text-xs ${p.stock_display <= 5 && p.stock_display > 0 ? "border-amber-500 text-amber-700 bg-amber-50" : ""}`}
+                      >
+                        {p.stock_display <= 0 ? "Esgotado" : `${p.stock_display} ${(p as any).unit ?? "un"}`}
+                      </Badge>
+                    </div>
+                  </div>
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <div className="col-span-full flex items-center justify-center py-12 text-muted-foreground">
+                  Nenhum produto encontrado
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Cart */}
+        <Card className="w-full lg:w-[420px] xl:w-[450px] flex flex-col lg:max-h-full shrink-0 shadow-md">
+          <CardHeader className="pb-2.5 pt-3.5 px-4 border-b">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base font-bold">
+                <ShoppingCart className="h-5 w-5 text-primary" />
+                Carrinho
+                {cart.length > 0 && (
+                  <Badge variant="secondary" className="px-2 py-0.5 text-xs font-semibold bg-primary/10 text-primary">
+                    {cart.reduce((s, i) => s + i.quantity, 0)} {cart.reduce((s, i) => s + i.quantity, 0) === 1 ? 'item' : 'itens'}
+                  </Badge>
+                )}
+              </CardTitle>
+              {cart.length > 0 && (
+                <div className="flex gap-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => setEditModalOpen(true)} className="h-8 px-2 text-xs text-primary hover:bg-primary/10 font-medium">
+                    <Pencil className="h-3.5 w-3.5 mr-1" /> Editar
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={clearCart} className="h-8 px-2 text-xs text-destructive hover:bg-destructive/10 font-medium">
+                    <X className="h-3.5 w-3.5 mr-1" /> Limpar
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+
+          <CardContent 
+            ref={cartContentRef} 
+            className="flex-1 overflow-y-auto min-h-0 p-3 sm:p-4 space-y-3 scroll-smooth"
+          >
+            {cart.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2.5">
+                <div className="w-12 h-12 rounded-full bg-muted/60 flex items-center justify-center">
+                  <Receipt className="h-6 w-6 opacity-60" />
+                </div>
+                <p className="text-sm font-medium">Carrinho vazio</p>
+                <p className="text-xs text-muted-foreground/80">Clique em um produto ao lado para adicionar</p>
+              </div>
+            ) : (
+              <>
+                <div className={`space-y-2.5 pr-0.5 ${cart.length > 3 ? "max-h-52 overflow-y-auto" : ""}`}>
+                  {cart.map((item) => (
+                    <div 
+                      key={item.cartItemId} 
+                      className="p-2.5 rounded-lg border border-border/80 bg-card hover:border-primary/40 transition-all shadow-xs space-y-1.5"
+                    >
+                      {/* Linha 1: Nome do produto e Total do Item */}
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-semibold text-foreground leading-snug line-clamp-2 flex-1">
+                          {item.product.name}
+                        </p>
+                        <span className="text-xs font-bold text-emerald-600 shrink-0 text-right">
+                          {formatCurrency(item.unitPrice * item.quantity)}
+                        </span>
+                      </div>
+
+                      {/* Linha 2: Preço Unitário & Controles de Quantidade */}
+                      <div className="flex items-center justify-between gap-2 pt-0.5 border-t border-border/40">
+                        <div className="text-[11px] text-muted-foreground font-medium">
+                          {fmtQty(item.quantity)} {(item.product as any).unit ?? "un"} × {formatCurrency(item.unitPrice)}
+                        </div>
+                        
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button 
+                            variant="outline" 
+                            size="icon" 
+                            className="h-6 w-6 rounded-md hover:bg-muted" 
+                            onClick={() => updateQty(item.cartItemId, -1)}
+                            title="Diminuir"
+                          >
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <span className="min-w-6 text-center text-xs font-bold px-1 text-foreground">
+                            {fmtQty(item.quantity)}
+                          </span>
+                          <Button 
+                            variant="outline" 
+                            size="icon" 
+                            className="h-6 w-6 rounded-md hover:bg-muted" 
+                            onClick={() => updateQty(item.cartItemId, 1)}
+                            title="Aumentar"
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6 text-destructive/70 hover:text-destructive hover:bg-destructive/10 ml-0.5" 
+                            onClick={() => removeFromCart(item.cartItemId)}
+                            title="Remover"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Adicionais se houver */}
+                      {item.selectedAdditionals && item.selectedAdditionals.length > 0 && (
+                        <div className="text-[10px] text-muted-foreground pl-1.5 border-l-2 border-primary/40 mt-1 bg-muted/30 py-0.5 rounded-r">
+                          + {item.selectedAdditionals.map(a => a.name).join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                {/* Discount */}
+                <div className="flex items-center gap-2">
+                  <Select value={discountType} onValueChange={(v) => setDiscountType(v as "fixed" | "percent")}>
+                    <SelectTrigger className="w-24 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixed">
+                        <div className="flex items-center gap-1"><DollarSign className="h-3 w-3" /> R$</div>
+                      </SelectItem>
+                      <SelectItem value="percent">
+                        <div className="flex items-center gap-1"><Percent className="h-3 w-3" /> %</div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number" min="0" step="0.01"
+                    placeholder="Desconto"
+                    value={discount || ""}
+                    onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                    className="h-9"
+                  />
+                </div>
+
+                {/* Payment method */}
+                <div className={`grid ${paymentMethods.length > 4 ? "grid-cols-5" : "grid-cols-4"} gap-1.5`}>
+                  {paymentMethods.map((pm) => (
+                    <button
+                      key={pm.value}
+                      onClick={() => handleSelectPaymentMethod(pm.value)}
+                      className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-medium transition-colors ${paymentMethod === pm.value
+                          ? "border-primary bg-primary/10 text-primary font-bold shadow-xs"
+                          : "border-border hover:bg-muted text-muted-foreground"
+                        }`}
+                    >
+                      <pm.icon className="h-4 w-4" />
+                      <span className="truncate w-full text-center">{pm.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Calculadora de Troco Rápido (Quando Dinheiro) */}
+                {paymentMethod === "cash" && (
+                  <div className="bg-emerald-50/80 border border-emerald-300 p-2.5 rounded-lg space-y-2 text-xs shadow-xs animate-in fade-in-50">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                        <Banknote className="w-4 h-4 text-emerald-600" />
+                        Calculadora de Troco:
+                      </span>
+                      {receivedCashAmount >= total && receivedCashAmount > 0 && (
+                        <span className="text-[11px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded border border-emerald-400">
+                          TROCO: {formatCurrency(changeAmount)}
+                        </span>
+                      )}
+                      {receivedCashAmount > 0 && receivedCashAmount < total && (
+                        <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+                          FALTAM: {formatCurrency(total - receivedCashAmount)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Botões de Cédulas Rápidas */}
+                    <div className="flex gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setReceivedCashInput(total.toFixed(2))}
+                        className="px-2 py-1 rounded bg-white border border-emerald-300 text-emerald-900 hover:bg-emerald-100 font-semibold text-[11px] transition-colors"
+                      >
+                        Exato ({formatCurrency(total)})
+                      </button>
+                      {[10, 20, 50, 100, 200]
+                        .filter(note => note >= total || (note >= 20 && note < total * 1.5))
+                        .slice(0, 4)
+                        .map(note => (
+                          <button
+                            key={note}
+                            type="button"
+                            onClick={() => setReceivedCashInput(note.toFixed(2))}
+                            className="px-2 py-1 rounded bg-white border border-emerald-300 text-emerald-900 hover:bg-emerald-100 font-semibold text-[11px] transition-colors"
+                          >
+                            R$ {note}
+                          </button>
+                        ))}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground whitespace-nowrap">Valor Recebido:</span>
+                      <div className="relative flex-1">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground font-semibold">R$</span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="0,00"
+                          value={receivedCashInput}
+                          onChange={(e) => setReceivedCashInput(e.target.value)}
+                          className="h-8 pl-8 text-xs font-bold bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Bloco de Opções da Promissória quando selecionada */}
+                {paymentMethod === "promissoria" && (
+                  <div className="bg-indigo-50/70 border border-indigo-200 p-2.5 rounded-lg space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-indigo-950 flex items-center gap-1">
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                        Condição de Pagamento (Promissória):
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      {[
+                        { id: "30", label: "30 Dias (1x)" },
+                        { id: "30_60", label: "30 / 60 Dias (2x)" },
+                        { id: "30_60_90", label: "Até 3x (90d)" },
+                        { id: "30_60_90_120", label: "Até 4x (120d)" },
+                        { id: "30_60_90_120_150", label: "Até 5x (150d)" },
+                        { id: "30_60_90_120_150_180", label: "Até 6x (180d)" },
+                        { id: "pulo_mes", label: "No Pulo (Mês que vem)" },
+                      ]
+                        .filter(p => promissoriaCfg.allowedPlans?.includes(p.id as any))
+                        .map(plan => (
+                          <button
+                            key={plan.id}
+                            type="button"
+                            onClick={() => setPromissoriaPlan(plan.id as any)}
+                            className={`p-1.5 rounded border text-left text-[11px] font-medium transition-all ${
+                              promissoriaPlan === plan.id
+                                ? "border-indigo-600 bg-indigo-600 text-white font-bold shadow-xs"
+                                : "border-indigo-200 bg-white text-indigo-900 hover:bg-indigo-50"
+                            }`}
+                          >
+                            {plan.label}
+                          </button>
+                        ))}
+                    </div>
+
+                    {/* Simulação de Parcelas */}
+                    <div className="bg-white/80 border border-indigo-100 rounded p-1.5 space-y-0.5 text-[10px] text-slate-700">
+                      <span className="font-semibold text-indigo-900 block mb-0.5">Vencimento das parcelas:</span>
+                      {calculateInstallments(total, promissoriaPlan).map((inst) => (
+                        <div key={inst.installmentNumber} className="flex justify-between">
+                          <span>{inst.installmentNumber}ª Parcela ({new Date(inst.dueDate + 'T12:00:00').toLocaleDateString('pt-BR')}):</span>
+                          <span className="font-bold text-indigo-950">R$ {inst.amount.toFixed(2).replace(".", ",")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Totals */}
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Subtotal</span>
+                    <span>{formatCurrency(subtotal)}</span>
+                  </div>
+                  {discountValue > 0 && (
+                    <div className="flex justify-between text-destructive">
+                      <span>Desconto</span>
+                      <span>-{formatCurrency(discountValue)}</span>
+                    </div>
+                  )}
+                  <Separator />
+                  <div className="flex justify-between text-lg font-bold">
+                    <span>Total</span>
+                    <span>{formatCurrency(total)}</span>
+                  </div>
+                </div>
+
+                {/* Dados do Cliente e Entrega */}
+                <div ref={customerSectionRef} className="space-y-2 pt-2 border-t">
+                  <div className="flex gap-2">
+                    <div className="grid grid-cols-2 gap-2 flex-1">
+                      <Input 
+                        ref={customerNameInputRef}
+                        placeholder={paymentMethod === "promissoria" ? "Nome do Cliente *" : "Nome do Cliente (Opcional)"} 
+                        value={customerName}
+                        onChange={e => setCustomerName(e.target.value)}
+                        className={`h-8 text-xs ${paymentMethod === "promissoria" && !customerName ? "border-amber-400 bg-amber-50/30 ring-1 ring-amber-400/50" : ""}`}
+                      />
+                      <Input 
+                        placeholder="Telefone (Opcional)" 
+                        value={customerPhone}
+                        onChange={e => setCustomerPhone(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      className="h-8 shrink-0 px-3 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 border-blue-200"
+                      onClick={() => setCustomerSearchModalOpen(true)}
+                    >
+                      <Search className="h-4 w-4 mr-1" />
+                      Buscar
+                    </Button>
+                  </div>
+
+                  {paymentMethod === "promissoria" && (
+                    <Input 
+                      ref={customerDocumentInputRef}
+                      placeholder={promissoriaCfg.requireDocument ? "CPF / RG do Cliente (Obrigatório) *" : "CPF / RG do Cliente (Opcional)"}
+                      value={customerDocument}
+                      onChange={e => setCustomerDocument(e.target.value)}
+                      className={`h-8 text-xs ${promissoriaCfg.requireDocument && !customerDocument ? "border-amber-400 bg-amber-50/30 ring-1 ring-amber-400/50" : ""}`}
+                    />
+                  )}
+
+                  {/* Banner de Fidelidade do Cliente Selecionado */}
+                  {(() => {
+                    const loyaltyCfg = getLoyaltyPromoConfig(storeId);
+                    if (!loyaltyCfg.enabled || (!customerId && !customerPhone.trim() && !customerName.trim())) return null;
+
+                    const purchasesCount = getCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, customerName.trim() || undefined);
+                    const target = loyaltyCfg.targetPurchases || 10;
+                    const hasReward = purchasesCount >= target;
+
+                    const handleApplyReward = () => {
+                      if (loyaltyCfg.rewardType === "fixed_discount") {
+                        setDiscountType("fixed");
+                        setDiscount(loyaltyCfg.rewardValue || 0);
+                      } else if (loyaltyCfg.rewardType === "percent_discount") {
+                        setDiscountType("percent");
+                        setDiscount(loyaltyCfg.rewardValue || 0);
+                      }
+                      // Subtrai a meta ou reseta selos
+                      setCustomerPurchasesCount(customerId || undefined, customerPhone.trim() || undefined, purchasesCount - target, customerName.trim() || undefined);
+                      toast.success(`🎁 Prêmio "${loyaltyCfg.rewardDescription}" aplicado ao pedido!`);
+                    };
+
+                    return (
+                      <div className="p-2 rounded-lg bg-gradient-to-r from-amber-500/10 to-amber-500/5 border border-amber-300 text-xs flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Sparkles className="h-4 w-4 text-amber-600 shrink-0" />
+                          <div className="truncate">
+                            <span className="font-bold text-amber-950 block truncate">{loyaltyCfg.name}:</span>
+                            <span className="text-[10px] text-amber-900 font-medium">
+                              {purchasesCount} de {target} compras acumuladas
+                            </span>
+                          </div>
+                        </div>
+
+                        {hasReward ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold shrink-0 animate-bounce shadow-sm gap-1 px-2.5"
+                            onClick={handleApplyReward}
+                          >
+                            <Gift className="h-3.5 w-3.5" />
+                            Aplicar Prêmio!
+                          </Button>
+                        ) : (
+                          <span className="text-[10px] font-bold bg-white border border-amber-200 text-amber-900 px-2 py-0.5 rounded shrink-0">
+                            Faltam {target - purchasesCount}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {(() => {
+                    const hasTables = Boolean(store?.table_count && Number(store.table_count) > 0);
+                    return (
+                      <div className={`grid ${hasTables ? "grid-cols-3" : "grid-cols-2"} gap-1`}>
+                        {hasTables && (
+                          <button 
+                              onClick={() => setDeliveryType("local")}
+                              className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "local" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                          >
+                              Mesa
+                          </button>
+                        )}
+                        <button 
+                            onClick={() => setDeliveryType("retirada")}
+                            className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "retirada" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                        >
+                            Loja
+                        </button>
+                        <button 
+                            onClick={() => setDeliveryType("entrega")}
+                            className={`py-1.5 rounded text-xs font-medium transition-colors ${deliveryType === "entrega" ? "bg-primary text-primary-foreground" : "bg-white border text-muted-foreground"}`}
+                        >
+                            Entrega
+                        </button>
+                      </div>
+                    );
+                  })()}
+                  {deliveryType === "entrega" && (
+                    <>
+                      <Input 
+                        placeholder="Endereço de Entrega Completo" 
+                        value={deliveryAddress}
+                        onChange={e => setDeliveryAddress(e.target.value)}
+                        className="h-8 text-xs"
+                        required={deliveryType === "entrega"}
+                      />
+                      <Input 
+                        placeholder="Observações de entrega (opcional)" 
+                        value={deliveryNotes}
+                        onChange={e => setDeliveryNotes(e.target.value)}
+                        className="h-8 text-xs mt-1"
+                      />
+                    </>
+                  )}
+                </div>
+
+                {/* Seletor de Vendedora / Vendedor */}
+                {sellers.length > 0 && (
+                  <div className="mt-2">
+                    <label className="text-xs font-semibold flex items-center justify-between mb-1">
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        Vendedor(a) <span className="text-destructive font-bold">*</span>
+                      </span>
+                      {!selectedSeller && (
+                        <span className="text-[11px] text-destructive font-normal">Obrigatório</span>
+                      )}
+                    </label>
+                    <select
+                      className={`w-full h-9 rounded-md border bg-background px-3 text-sm transition-colors ${
+                        !selectedSeller ? "border-amber-400 bg-amber-50/40 focus:border-primary" : "border-input"
+                      }`}
+                      value={selectedSeller?.name ?? ""}
+                      onChange={(e) => {
+                        const found = sellers.find(s => s.name === e.target.value) || null;
+                        setSelectedSeller(found);
+                      }}
+                    >
+                      <option value="">— Selecione o(a) vendedor(a) —</option>
+                      {sellers.map((s) => (
+                        <option key={s.name} value={s.name}>
+                          {s.name} ({s.commission}%)
+                        </option>
+                      ))}
+                    </select>
+                    {selectedSeller && (
+                      <p className="text-xs text-emerald-600 mt-1 font-medium">
+                        Comissão: R$ {((total * selectedSeller.commission) / 100).toFixed(2)} ({selectedSeller.commission}%)
+                      </p>
+                    )}
+                  </div>
+                )}
+
+              </>
+            )}
+          </CardContent>
+
+          {cart.length > 0 && (
+            <CardFooter className="p-3 border-t bg-card shrink-0 flex flex-col gap-2">
+              <Button
+                className="w-full h-12 sm:h-13 text-base sm:text-lg font-bold bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-all"
+                onClick={() => saleMutation.mutate({})}
+                disabled={cart.length === 0 || saleMutation.isPending}
+              >
+                Finalizar Venda ({formatCurrency(total)})
+              </Button>
+              {selectedTable && (
+                <Button
+                  className="w-full h-10 text-sm font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-xs"
+                  onClick={() => saleMutation.mutate({ pendingOnly: true })}
+                  disabled={cart.length === 0 || saleMutation.isPending}
+                >
+                  Salvar Pedido (Pendente)
+                </Button>
+              )}
+            </CardFooter>
+          )}
+        </Card>
+      </div>
+
+      {/* Cupom Modal */}
+      <CupomModal
+        ticket={lastTicket}
+        open={cupomOpen}
+        onClose={() => setCupomOpen(false)}
+      />
+
+      <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Editar Itens da Venda</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 max-h-[60vh] overflow-y-auto pr-2">
+            {cart.length === 0 ? (
+              <p className="text-muted-foreground text-center py-4">Nenhum item na venda.</p>
+            ) : (
+              cart.map((item) => (
+                <div key={item.cartItemId} className="flex flex-col gap-3 p-4 bg-muted/30 rounded-lg border">
+                  {/* Linha superior: Nome do Produto e Botão Apagar */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-base">{item.product.name}</p>
+                      {item.selectedAdditionals && item.selectedAdditionals.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          + {item.selectedAdditionals.map(a => a.name).join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <Button variant="ghost" size="icon" className="text-destructive h-8 w-8 hover:bg-destructive/10 shrink-0 -mt-1 -mr-1" onClick={() => removeFromCart(item.cartItemId)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  {/* Linha inferior: Preço, Quantidade e Total */}
+                  <div className="flex items-end justify-between gap-2 pt-2 border-t border-border/50">
+                    <div className="flex flex-col gap-1.5 w-28">
+                      <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Preço Un. (R$)</Label>
+                      <Input 
+                        type="number" 
+                        className="h-9 font-medium" 
+                        value={item.unitPrice === 0 ? '' : item.unitPrice}
+                        onChange={(e) => updateItemPrice(item.cartItemId, parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+                    
+                    <div className="flex flex-col gap-1.5 items-center">
+                      <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Qtd.</Label>
+                      <div className="flex items-center gap-1 bg-background rounded-md border h-9 px-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7 rounded-sm hover:bg-muted" onClick={() => updateQty(item.cartItemId, -1)}>
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span className="w-10 text-center text-sm font-semibold">{fmtQty(item.quantity)}</span>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 rounded-sm hover:bg-muted" onClick={() => updateQty(item.cartItemId, 1)}>
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 items-end min-w-[80px]">
+                      <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Total (R$)</Label>
+                      <span className="text-lg font-bold text-emerald-600 leading-9">{formatCurrency(item.unitPrice * item.quantity)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Product Options Modal */}
+      <Dialog open={productModalOpen} onOpenChange={setProductModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl">{selectedProduct?.name}</DialogTitle>
+          </DialogHeader>
+
+          {selectedProduct && (
+            <div className="space-y-6 py-2">
+              {/* Peso / Quantidade */}
+              {((selectedProduct as any).unit === "KG" || (selectedProduct as any).unit === "G" || (selectedProduct as any).unit === "L") && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Quantidade ({(selectedProduct as any).unit})</Label>
+                    <Input
+                      type="number"
+                      step="0.001"
+                      min="0.001"
+                      className="text-lg h-12"
+                      value={modalQty}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setModalQty(val);
+                        if (val && !isNaN(Number(val))) {
+                          setModalPrice((Number(val) * selectedProduct.price).toFixed(2));
+                        } else {
+                          setModalPrice("");
+                        }
+                      }}
+                      placeholder={`Ex: 0.500`}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Valor (R$)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      className="text-lg h-12"
+                      value={modalPrice}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setModalPrice(val);
+                        if (val && !isNaN(Number(val)) && selectedProduct.price > 0) {
+                          setModalQty((Number(val) / selectedProduct.price).toFixed(3));
+                        } else {
+                          setModalQty("");
+                        }
+                      }}
+                      placeholder={`Ex: 20.00`}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Adicionais */}
+              {(selectedProduct as any).has_additionals && productAdditionals.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <Label className="text-base">Acompanhamentos</Label>
+                      {(selectedProduct as any).max_additionals > 0 && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Escolha até {(selectedProduct as any).max_additionals} {(selectedProduct as any).max_additionals === 1 ? "opção" : "opções"}
+                        </p>
+                      )}
+                    </div>
+                    <Badge variant="secondary" className="text-[11px] font-bold">
+                      {selectedAdds.length} / {(selectedProduct as any).max_additionals || "∞"}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-2 max-h-60 overflow-y-auto pr-1">
+                    {productAdditionals.map((add) => {
+                      const isSelected = selectedAdds.some((a) =>
+                        add.id ? a.id === add.id : a.name === add.name
+                      );
+                      const maxReached = (selectedProduct as any).max_additionals > 0 && 
+                                       selectedAdds.length >= (selectedProduct as any).max_additionals;
+
+                      return (
+                        <div
+                          key={add.id}
+                          className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
+                            isSelected 
+                              ? "border-primary bg-primary/5" 
+                              : maxReached 
+                                ? "opacity-50 grayscale cursor-not-allowed" 
+                                : "hover:bg-muted/50"
+                          }`}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedAdds(prev => prev.filter((a) =>
+                                add.id ? a.id !== add.id : a.name !== add.name
+                              ));
+                            } else {
+                              if (maxReached) {
+                                toast.error(`Você só pode escolher até ${(selectedProduct as any).max_additionals} acompanhamentos.`);
+                                return;
+                              }
+                              setSelectedAdds(prev => [...prev, add]);
+                            }
+                          }}
+                        >
+                          <span className={isSelected ? "font-semibold" : ""}>{add.name}</span>
+                          <span className="text-sm font-medium text-muted-foreground">
+                            {add.price > 0 ? `+ ${formatCurrency(add.price)}` : "Grátis"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Botão Salvar */}
+              <Button
+                className="w-full h-12 text-base"
+                onClick={() => {
+                  const qtyNum = parseFloat(modalQty as string);
+                  if (isNaN(qtyNum) || qtyNum <= 0) {
+                    toast.error("Informe uma quantidade/peso válido.");
+                    return;
+                  }
+                  
+                  // Calcula preço final: soma o preço de todos os adicionais selecionados
+                  const extraPrice = selectedAdds.reduce((sum: number, add: any) => sum + (add.price || 0), 0);
+
+                  const finalUnitPrice = selectedProduct.price + extraPrice;
+                  addToCart(selectedProduct, qtyNum, selectedAdds, finalUnitPrice);
+                }}
+              >
+                Adicionar ao Carrinho
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      {customerSearchModalOpen && (
+        <CustomerSearchModal
+          isOpen={customerSearchModalOpen}
+          onClose={() => setCustomerSearchModalOpen(false)}
+          storeId={store?.id || ""}
+          onSelectCustomer={(customer) => {
+            setCustomerName(customer.name || "");
+            setCustomerPhone(customer.phone || "");
+            setCustomerId(customer.id);
+            if (customer.address) {
+              setDeliveryAddress(customer.address);
+            }
+          }}
+          onNewCustomer={() => setCustomerFormModalOpen(true)}
+        />
+      )}
+
+      {customerFormModalOpen && (
+        <ClienteFormModal
+          isOpen={customerFormModalOpen}
+          onClose={() => setCustomerFormModalOpen(false)}
+          storeId={store?.id || ""}
+          customer={null}
+        />
+      )}
+
+      {/* ═══ Modal: Histórico de Vendas & Cancelamento ═══ */}
+      <Dialog open={historyModalOpen} onOpenChange={setHistoryModalOpen}>
+        <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col p-6">
+          <DialogHeader className="pb-2 border-b">
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+              <History className="h-6 w-6 text-primary" />
+              Histórico de Vendas do PDV & Cancelamento
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="py-2 flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Filtrar por código da venda (ID) ou forma de pagamento..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="pl-9 h-10"
+              />
+            </div>
+            <Button variant="outline" size="sm" onClick={() => refetchRecentSales()} className="h-10 gap-1.5">
+              <RotateCcw className="h-4 w-4" /> Atualizar
+            </Button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto border rounded-xl divide-y">
+            {loadingSales ? (
+              <div className="p-8 text-center text-muted-foreground">Carregando histórico de vendas...</div>
+            ) : recentSales.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">Nenhuma venda recente encontrada.</div>
+            ) : (
+              recentSales
+                .filter((s: any) => {
+                  if (!historySearch.trim()) return true;
+                  const query = historySearch.toLowerCase();
+                  return (
+                    s.id.toLowerCase().includes(query) ||
+                    (s.payment_method && s.payment_method.toLowerCase().includes(query)) ||
+                    (s.notes && s.notes.toLowerCase().includes(query))
+                  );
+                })
+                .map((sale: any) => {
+                  const isCancelled = sale.status === "cancelled";
+                  const itemsCount = sale.sale_items?.length || 0;
+                  const saleDate = new Date(sale.created_at).toLocaleString("pt-BR");
+
+                  return (
+                    <div
+                      key={sale.id}
+                      className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors ${
+                        isCancelled ? "bg-red-50/50 hover:bg-red-50" : "bg-card hover:bg-muted/30"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-base">
+                            Venda #{sale.id.slice(-6).toUpperCase()}
+                          </span>
+                          {isCancelled ? (
+                            <Badge variant="destructive" className="flex items-center gap-1 font-semibold">
+                              <Ban className="h-3 w-3" /> CANCELADA
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-emerald-600 hover:bg-emerald-700">CONCLUÍDA</Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground font-mono">{saleDate}</span>
+                        </div>
+
+                        <div className="text-sm text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
+                          <span>
+                            <strong>Pagamento:</strong> {paymentLabel[sale.payment_method] ?? sale.payment_method?.toUpperCase()}
+                          </span>
+                          <span>
+                            <strong>Itens:</strong> {itemsCount} {itemsCount === 1 ? "produto" : "produtos"}
+                          </span>
+                          {sale.notes && (
+                            <span className="text-amber-700 italic">
+                              {sale.notes}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
+                        <div className="text-right">
+                          <span className={`text-lg font-bold block ${isCancelled ? "line-through text-muted-foreground" : "text-emerald-600"}`}>
+                            R$ {Number(sale.total).toFixed(2).replace(".", ",")}
+                          </span>
+                        </div>
+
+                        {!isCancelled && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedSaleToCancel(sale);
+                              setCancelReasonInput("");
+                            }}
+                            className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200 gap-1.5 h-9"
+                          >
+                            <Ban className="h-4 w-4" /> Cancelar Venda
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+
+          {/* Submodal interno de confirmação dentro do mesmo Dialog (Zero conflito de foco) */}
+          {selectedSaleToCancel && (
+            <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 rounded-lg">
+              <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between border-b pb-3">
+                  <div className="flex items-center gap-2 text-red-600 font-bold text-lg">
+                    <AlertTriangle className="h-5 w-5" />
+                    <span>Cancelar / Estornar Venda</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSaleToCancel(null)}
+                    className="p-1 rounded hover:bg-muted text-muted-foreground"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="bg-red-50 border border-red-200 p-3 rounded-xl text-xs text-red-800 space-y-1">
+                  <p className="font-bold">Atenção:</p>
+                  <p>
+                    A venda <strong>#{selectedSaleToCancel.id.slice(-6).toUpperCase()}</strong> no valor de{" "}
+                    <strong>R$ {Number(selectedSaleToCancel.total).toFixed(2).replace(".", ",")}</strong> será cancelada.
+                  </p>
+                  <p>Os itens vendidos retornarão automaticamente ao estoque da loja.</p>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-semibold mb-1.5 block">Motivo do cancelamento (opcional):</Label>
+                  <Input
+                    placeholder="Ex: Desistência do cliente, erro de digitação, devolução..."
+                    value={cancelReasonInput}
+                    onChange={(e) => setCancelReasonInput(e.target.value)}
+                    className="h-10"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex gap-2 justify-end pt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setSelectedSaleToCancel(null)}
+                    disabled={cancelSaleMutation.isPending}
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    type="button"
+                    className="bg-red-600 hover:bg-red-700 text-white font-semibold gap-1.5"
+                    disabled={cancelSaleMutation.isPending}
+                    onClick={() =>
+                      cancelSaleMutation.mutate({
+                        saleId: selectedSaleToCancel.id,
+                        reason: cancelReasonInput,
+                        items: selectedSaleToCancel.sale_items,
+                      })
+                    }
+                  >
+                    {cancelSaleMutation.isPending ? "Cancelando..." : "Confirmar Cancelamento"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      {/* ── MODAL: ABERTURA DE CAIXA ─────────────────────────────────── */}
+      <Dialog open={openCaixaModal} onOpenChange={setOpenCaixaModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-700">
+              <Unlock className="w-5 h-5" />
+              Abertura de Caixa / Turno
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-900 space-y-1">
+              <p className="font-bold">Início de Atendimento:</p>
+              <p>Abra o caixa do turno para permitir o registro de novas vendas no PDV.</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Operador Responsável:</Label>
+              <Input
+                value={openCaixaOperator}
+                onChange={(e) => setOpenCaixaOperator(e.target.value)}
+                placeholder="Nome do operador de caixa..."
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Fundo de Troco Inicial (Dinheiro na Gaveta):</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                <Input
+                  type="number"
+                  step="0.50"
+                  min={0}
+                  value={openCaixaInitialAmount}
+                  onChange={(e) => setOpenCaixaInitialAmount(e.target.value)}
+                  className="pl-9 font-bold text-base"
+                  placeholder="0,00"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Valor em notas e moedas colocado na gaveta para troco.</p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" size="sm" onClick={() => setOpenCaixaModal(false)}>
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!openCaixaOperator.trim()) {
+                    toast.error("Informe o nome do operador para abrir o caixa.");
+                    return;
+                  }
+                  const initial = parseFloat(openCaixaInitialAmount) || 0;
+                  openCaixa(storeId || undefined, openCaixaOperator.trim(), initial);
+                  refreshCaixa();
+                  setOpenCaixaModal(false);
+                  toast.success(`🟢 Caixa aberto com sucesso com troco inicial de ${formatCurrency(initial)}!`);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Confirmar Abertura
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── MODAL: SANGRIA & SUPRIMENTO ───────────────────────────────── */}
+      <Dialog open={movModalOpen} onOpenChange={setMovModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={`flex items-center gap-2 ${movType === 'suprimento' ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {movType === 'suprimento' ? (
+                <>
+                  <ArrowDownRight className="w-5 h-5" />
+                  Entrada de Dinheiro (Suprimento / Troco)
+                </>
+              ) : (
+                <>
+                  <ArrowUpRight className="w-5 h-5" />
+                  Retirada de Dinheiro (Sangria de Caixa)
+                </>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMovType("suprimento")}
+                className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                  movType === "suprimento"
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-slate-50 text-slate-700 border-slate-200"
+                }`}
+              >
+                + Suprimento (Entrada)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMovType("sangria")}
+                className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                  movType === "sangria"
+                    ? "bg-rose-600 text-white border-rose-600"
+                    : "bg-slate-50 text-slate-700 border-slate-200"
+                }`}
+              >
+                - Sangria (Retirada)
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Valor da Movimentação:</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                <Input
+                  type="number"
+                  step="0.50"
+                  min={0.01}
+                  value={movAmount}
+                  onChange={(e) => setMovAmount(e.target.value)}
+                  className="pl-9 font-bold text-base"
+                  placeholder="0,00"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Motivo / Descrição:</Label>
+              <Input
+                value={movReason}
+                onChange={(e) => setMovReason(e.target.value)}
+                placeholder={movType === "suprimento" ? "Ex: Troco adicional trazido pelo gerente" : "Ex: Recolhimento de segurança / Pagamento de água"}
+              />
+            </div>
+
+            {/* Senha do Dono / Administrador */}
+            <div className="space-y-1.5 p-2.5 rounded-lg bg-amber-50/70 border border-amber-200">
+              <Label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
+                Senha Master do Dono / Gerente:
+              </Label>
+              <Input
+                type="password"
+                placeholder="Digite a senha master..."
+                value={movPassword}
+                onChange={(e) => setMovPassword(e.target.value)}
+                className="bg-white"
+              />
+              <p className="text-[10px] text-amber-700">
+                {localStorage.getItem("pdv_admin_password")
+                  ? "Esta ação exige autorização com a Senha Master configurada."
+                  : "Dica: Caso não tenha definido uma senha em Configurações > Segurança, digite a senha padrão (1234)."}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="outline" size="sm" onClick={() => { setMovModalOpen(false); setMovPassword(""); }}>
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const val = parseFloat(movAmount) || 0;
+                  if (val <= 0) {
+                    toast.error("Informe um valor maior que zero.");
+                    return;
+                  }
+
+                  const savedPass = localStorage.getItem("pdv_admin_password") || "1234";
+                  if (movPassword !== savedPass) {
+                    toast.error("🔒 Senha do Dono/Gerente incorreta! Movimentação não autorizada.");
+                    return;
+                  }
+
+                  try {
+                    addCaixaMovement(
+                      storeId || undefined,
+                      movType,
+                      val,
+                      movReason.trim(),
+                      profile?.full_name || currentCaixa?.openedBy || "Operador"
+                    );
+                    refreshCaixa();
+                    setMovModalOpen(false);
+                    setMovPassword("");
+                    toast.success(
+                      movType === "suprimento"
+                        ? `Suprimento de ${formatCurrency(val)} adicionado ao caixa!`
+                        : `Sangria de ${formatCurrency(val)} registrada com sucesso!`
+                    );
+                  } catch (e: any) {
+                    toast.error("Erro na movimentação: " + e.message);
+                  }
+                }}
+                className={movType === 'suprimento' ? 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold' : 'bg-rose-600 hover:bg-rose-700 text-white font-bold'}
+              >
+                Confirmar {movType === 'suprimento' ? 'Suprimento' : 'Sangria'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── MODAL: FECHAMENTO DE CAIXA ─────────────────────────────────── */}
+      <Dialog open={closeCaixaModalOpen} onOpenChange={setCloseCaixaModalOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <Lock className="w-5 h-5 text-indigo-600" />
+              Fechamento de Caixa / Turno
+            </DialogTitle>
+          </DialogHeader>
+
+          {currentCaixa && (
+            <div className="space-y-4 pt-2">
+              <div className="bg-slate-50 border p-3 rounded-xl text-xs space-y-1">
+                <div className="flex justify-between font-semibold">
+                  <span>Operador: {currentCaixa.openedBy}</span>
+                  <span>Aberto às: {new Date(currentCaixa.openedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t">
+                  <span>Fundo Inicial: {formatCurrency(currentCaixa.initialAmount)}</span>
+                  <span>Vendas em Dinheiro: {formatCurrency(currentCaixa.salesSummary.cash)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Suprimentos (+): {formatCurrency(currentCaixa.movements.filter(m => m.type === "suprimento").reduce((s, m) => s + m.amount, 0))}</span>
+                  <span>Sangrias (-): {formatCurrency(currentCaixa.movements.filter(m => m.type === "sangria").reduce((s, m) => s + m.amount, 0))}</span>
+                </div>
+                <div className="flex justify-between font-bold text-emerald-800 text-sm pt-1 border-t">
+                  <span>Dinheiro Esperado na Gaveta:</span>
+                  <span>{formatCurrency(currentCaixa.expectedCashInDrawer)}</span>
+                </div>
+              </div>
+
+              {/* Resumo dos outros meios */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                <div className="bg-teal-50 border border-teal-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">PIX</p>
+                  <p className="font-bold text-teal-800">{formatCurrency(currentCaixa.salesSummary.pix)}</p>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Cartão Crédito</p>
+                  <p className="font-bold text-blue-800">{formatCurrency(currentCaixa.salesSummary.credit)}</p>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Cartão Débito</p>
+                  <p className="font-bold text-indigo-800">{formatCurrency(currentCaixa.salesSummary.debit)}</p>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 p-2 rounded-lg">
+                  <p className="text-slate-600 font-semibold">Promissórias</p>
+                  <p className="font-bold text-amber-800">{formatCurrency(currentCaixa.salesSummary.promissoria)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t">
+                <Label className="text-xs font-bold text-slate-800">
+                  Informe o valor contado em DINHEIRO FÍSICO na gaveta:
+                </Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-sm">R$</span>
+                  <Input
+                    type="number"
+                    step="0.50"
+                    min={0}
+                    value={closeActualCash}
+                    onChange={(e) => setCloseActualCash(e.target.value)}
+                    className="pl-9 font-bold text-lg"
+                    placeholder="0,00"
+                    autoFocus
+                  />
+                </div>
+                {closeActualCash !== "" && (
+                  <div className="text-xs font-bold pt-1">
+                    {(() => {
+                      const actual = parseFloat(closeActualCash) || 0;
+                      const diff = actual - currentCaixa.expectedCashInDrawer;
+                      if (diff === 0) return <span className="text-emerald-600">✓ Caixa Batido (Diferença: R$ 0,00)</span>;
+                      if (diff > 0) return <span className="text-blue-600">⚠ Sobra de Caixa: +{formatCurrency(diff)}</span>;
+                      return <span className="text-rose-600">⚠ Falta de Caixa: {formatCurrency(diff)}</span>;
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Observações do Fechamento (opcional):</Label>
+                <Input
+                  value={closeNotes}
+                  onChange={(e) => setCloseNotes(e.target.value)}
+                  placeholder="Ex: Turno da manhã, sangria realizada para pagamento de fornecedor..."
+                />
+              </div>
+
+              {/* Senha do Dono / Administrador (Opcional se desativado) */}
+              {localStorage.getItem("pdv_require_password_close_caixa") !== "false" ? (
+                <div className="space-y-1.5 p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-indigo-600" />
+                      Senha Master do Dono / Gerente:
+                    </Label>
+                    <span className="text-[10px] text-indigo-600 font-medium">(Obrigatório)</span>
+                  </div>
+                  <Input
+                    type="password"
+                    placeholder="Digite a senha master..."
+                    value={closePassword}
+                    onChange={(e) => setClosePassword(e.target.value)}
+                    className="bg-white"
+                  />
+                  <p className="text-[10px] text-indigo-700">
+                    {localStorage.getItem("pdv_admin_password")
+                      ? "Esta ação exige autorização com a Senha Master configurada."
+                      : "Dica: Caso não tenha definido uma senha em Configurações > Segurança, digite a senha padrão (1234)."}
+                  </p>
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 text-xs flex items-center gap-2">
+                  <Unlock className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Fechamento direto sem solicitação de senha master (desativado nas configurações).</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <Button variant="outline" size="sm" onClick={() => { setCloseCaixaModalOpen(false); setClosePassword(""); }}>
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const actual = parseFloat(closeActualCash);
+                    if (isNaN(actual) || actual < 0) {
+                      toast.error("Por favor, informe a contagem do dinheiro na gaveta.");
+                      return;
+                    }
+
+                    const requirePassword = localStorage.getItem("pdv_require_password_close_caixa") !== "false";
+                    if (requirePassword) {
+                      const savedPass = localStorage.getItem("pdv_admin_password") || "1234";
+                      if (closePassword !== savedPass) {
+                        toast.error("🔒 Senha do Dono/Gerente incorreta! Fechamento não autorizado.");
+                        return;
+                      }
+                    }
+
+                    try {
+                      closeCaixa(
+                        storeId || undefined,
+                        profile?.full_name || currentCaixa.openedBy,
+                        actual,
+                        closeNotes.trim()
+                      );
+                      refreshCaixa();
+                      setCloseCaixaModalOpen(false);
+                      setClosePassword("");
+                      toast.success("🔒 Caixa fechado com sucesso! Relatório salvo em Relatórios > Controle de Caixas.");
+                    } catch (e: any) {
+                      toast.error("Erro ao fechar caixa: " + e.message);
+                    }
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold gap-1"
+                >
+                  <Lock className="w-4 h-4" />
+                  Confirmar e Fechar Caixa
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

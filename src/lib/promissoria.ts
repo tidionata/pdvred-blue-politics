@@ -1,0 +1,237 @@
+import { db } from "./db";
+
+export interface PromissoriaInstallment {
+  installmentNumber: number;
+  dueDate: string; // YYYY-MM-DD
+  amount: number;
+  status: "pending" | "paid";
+  paidAt?: string;
+  paymentMethod?: string;
+}
+
+export type PromissoriaPlanType = 
+  | "30" 
+  | "30_60" 
+  | "30_60_90" 
+  | "30_60_90_120" 
+  | "30_60_90_120_150" 
+  | "30_60_90_120_150_180" 
+  | "pulo_mes";
+
+export interface Promissoria {
+  id: string;
+  storeId?: string;
+  saleId?: string;
+  customerId?: string;
+  customerName: string;
+  customerPhone?: string;
+  customerDocument?: string; // CPF / RG
+  totalAmount: number;
+  plan: PromissoriaPlanType;
+  installmentsCount: number;
+  installments: PromissoriaInstallment[];
+  status: "pending" | "partially_paid" | "paid" | "cancelled";
+  createdAt: string;
+  notes?: string;
+}
+
+export interface PromissoriaConfig {
+  enabled: boolean;
+  allowedPlans: Array<PromissoriaPlanType>;
+  defaultPlan?: string;
+  requireDocument?: boolean;
+}
+
+const STORAGE_CONFIG_KEY = "pdv_promissoria_config";
+const STORAGE_DATA_KEY = "pdv_promissorias_list";
+
+export const DEFAULT_PROMISSORIA_CONFIG: PromissoriaConfig = {
+  enabled: false,
+  allowedPlans: [
+    "30", 
+    "30_60", 
+    "30_60_90", 
+    "30_60_90_120", 
+    "30_60_90_120_150", 
+    "30_60_90_120_150_180", 
+    "pulo_mes"
+  ],
+  defaultPlan: "30",
+  requireDocument: false,
+};
+
+export function getPromissoriaConfig(storeId?: string): PromissoriaConfig {
+  try {
+    const key = storeId ? `${STORAGE_CONFIG_KEY}_${storeId}` : STORAGE_CONFIG_KEY;
+    const raw = localStorage.getItem(key) || localStorage.getItem(STORAGE_CONFIG_KEY);
+    if (!raw) return DEFAULT_PROMISSORIA_CONFIG;
+    return { ...DEFAULT_PROMISSORIA_CONFIG, ...JSON.parse(raw) };
+  } catch (e) {
+    return DEFAULT_PROMISSORIA_CONFIG;
+  }
+}
+
+export function savePromissoriaConfig(config: PromissoriaConfig, storeId?: string): void {
+  const key = storeId ? `${STORAGE_CONFIG_KEY}_${storeId}` : STORAGE_CONFIG_KEY;
+  localStorage.setItem(key, JSON.stringify(config));
+  localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(config));
+}
+
+export function calculateInstallments(
+  total: number,
+  plan: PromissoriaPlanType,
+  baseDate: Date = new Date()
+): PromissoriaInstallment[] {
+  const installments: PromissoriaInstallment[] = [];
+
+  const splitInstallments = (count: number) => {
+    const part = Number((total / count).toFixed(2));
+    let accumulated = 0;
+    for (let i = 1; i <= count; i++) {
+      const due = new Date(baseDate);
+      due.setDate(due.getDate() + (i * 30));
+      const amount = i === count ? Number((total - accumulated).toFixed(2)) : part;
+      accumulated += amount;
+      installments.push({
+        installmentNumber: i,
+        dueDate: due.toISOString().slice(0, 10),
+        amount: amount,
+        status: "pending",
+      });
+    }
+  };
+
+  if (plan === "30") {
+    splitInstallments(1);
+  } else if (plan === "30_60") {
+    splitInstallments(2);
+  } else if (plan === "30_60_90") {
+    splitInstallments(3);
+  } else if (plan === "30_60_90_120") {
+    splitInstallments(4);
+  } else if (plan === "30_60_90_120_150") {
+    splitInstallments(5);
+  } else if (plan === "30_60_90_120_150_180") {
+    splitInstallments(6);
+  } else if (plan === "pulo_mes") {
+    const due = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 10);
+    if (due.getTime() <= baseDate.getTime()) {
+      due.setMonth(due.getMonth() + 1);
+    }
+    installments.push({
+      installmentNumber: 1,
+      dueDate: due.toISOString().slice(0, 10),
+      amount: total,
+      status: "pending",
+    });
+  }
+
+  return installments;
+}
+
+function persistPromissoriaToDexie(prom: Promissoria) {
+  try {
+    db.promissorias.put(prom).catch((err) => console.warn("Erro ao salvar promissória no Dexie:", err));
+  } catch (e) {
+    // Non-blocking
+  }
+}
+
+export async function restorePromissoriasFromDexie(storeId?: string): Promise<Promissoria[]> {
+  try {
+    const existing = getAllPromissorias(storeId);
+    if (existing.length > 0) return existing;
+
+    let list: Promissoria[];
+    if (storeId) {
+      list = await db.promissorias.where("storeId").equals(storeId).toArray();
+    } else {
+      list = await db.promissorias.toArray();
+    }
+
+    if (list && list.length > 0) {
+      localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(list));
+      return list;
+    }
+    return [];
+  } catch (e) {
+    console.error("Erro ao restaurar promissórias do Dexie:", e);
+    return [];
+  }
+}
+
+export function getAllPromissorias(storeId?: string): Promissoria[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_DATA_KEY);
+    const list: Promissoria[] = raw ? JSON.parse(raw) : [];
+    if (!storeId) return list;
+    return list.filter((p) => !p.storeId || p.storeId === storeId);
+  } catch (e) {
+    return [];
+  }
+}
+
+export function createPromissoria(promissoria: Omit<Promissoria, "id" | "createdAt" | "status">): Promissoria {
+  const list = getAllPromissorias();
+  const newRecord: Promissoria = {
+    ...promissoria,
+    id: `prom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    createdAt: new Date().toISOString(),
+    status: "pending",
+  };
+  list.unshift(newRecord);
+  localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(list));
+  persistPromissoriaToDexie(newRecord);
+  return newRecord;
+}
+
+export function payInstallment(
+  promissoriaId: string,
+  installmentNumber: number,
+  paymentMethod: string = "dinheiro"
+): Promissoria | null {
+  const list = getAllPromissorias();
+  const idx = list.findIndex((p) => p.id === promissoriaId);
+  if (idx === -1) return null;
+
+  const prom = list[idx];
+  let hasPending = false;
+  let allPaid = true;
+
+  prom.installments = prom.installments.map((inst) => {
+    if (inst.installmentNumber === installmentNumber) {
+      return {
+        ...inst,
+        status: "paid",
+        paidAt: new Date().toISOString(),
+        paymentMethod,
+      };
+    }
+    if (inst.status === "pending") {
+      hasPending = true;
+      allPaid = false;
+    }
+    return inst;
+  });
+
+  if (allPaid) {
+    prom.status = "paid";
+  } else if (hasPending) {
+    prom.status = "partially_paid";
+  }
+
+  list[idx] = prom;
+  localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(list));
+  persistPromissoriaToDexie(prom);
+  return prom;
+}
+
+export function cancelPromissoria(promissoriaId: string): boolean {
+  const list = getAllPromissorias();
+  const idx = list.findIndex((p) => p.id === promissoriaId);
+  if (idx === -1) return false;
+  list[idx].status = "cancelled";
+  localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(list));
+  persistPromissoriaToDexie(list[idx]);
+  return true;
+}
